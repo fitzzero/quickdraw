@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { PrismaPGlite } from "pglite-prisma-adapter";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPostgresTestDatabase, PrismaClient } from "../../test/prisma/setup";
 import {
   buildPgliteTemplate,
   computeMigrationsFingerprint,
@@ -10,7 +13,9 @@ import {
   pgliteTemplatePaths,
   readMigrationSql,
   resetDatabase,
+  withSavepoints,
   workerDatabaseUrl,
+  type SavepointTransaction,
 } from "./prisma";
 
 const MIGRATION_SQL = `CREATE TABLE "User" (id TEXT PRIMARY KEY, email TEXT NOT NULL);`;
@@ -105,4 +110,174 @@ describe("PGlite template machinery", () => {
     expect(rows.rows[0]?.count).toBe(0);
     await Promise.all([first.close(), second.close()]);
   }, 60_000);
+});
+
+describe("withSavepoints", () => {
+  /** A driver adapter factory whose transactions record the SQL they run, with savepoints of their own or none. */
+  function fakeFactory(own: boolean) {
+    const ran: string[] = [];
+    const transaction: SavepointTransaction = {
+      executeRaw: async (query) => {
+        ran.push(query.sql);
+        return 0;
+      },
+      ...(own
+        ? {
+            createSavepoint: async (name: string) => {
+              ran.push(`own ${name}`);
+            },
+          }
+        : {}),
+    };
+    const factory = {
+      provider: "postgres" as const,
+      adapterName: "fake",
+      connect: async () => ({
+        name: "adapter",
+        startTransaction: async (isolationLevel?: never) => {
+          ran.push(`begin ${String(isolationLevel)}`);
+          return transaction;
+        },
+      }),
+      connectToShadowDb() {
+        return this.adapterName;
+      },
+    };
+    return { factory, ran };
+  }
+
+  it("gives an adapter's transactions the savepoints of @prisma/adapter-pg, and keeps the rest", async () => {
+    const { factory, ran } = fakeFactory(false);
+    const wrapped = withSavepoints(factory);
+    expect(wrapped.provider).toBe("postgres");
+    expect(wrapped.connectToShadowDb()).toBe("fake");
+    const adapter = await wrapped.connect();
+    expect(adapter.name).toBe("adapter");
+    const transaction = await adapter.startTransaction();
+    await transaction.createSavepoint?.("prisma_sp_0");
+    await transaction.rollbackToSavepoint?.("prisma_sp_0");
+    await transaction.releaseSavepoint?.("prisma_sp_0");
+    expect(ran).toEqual([
+      "begin undefined",
+      "SAVEPOINT prisma_sp_0",
+      "ROLLBACK TO SAVEPOINT prisma_sp_0",
+      "RELEASE SAVEPOINT prisma_sp_0",
+    ]);
+  });
+
+  it("leaves an adapter with savepoints of its own as it is", async () => {
+    const { factory, ran } = fakeFactory(true);
+    const transaction = await (await withSavepoints(factory).connect()).startTransaction();
+    await transaction.createSavepoint?.("prisma_sp_0");
+    expect(transaction.releaseSavepoint).toBeUndefined();
+    expect(ran).toEqual(["begin undefined", "own prisma_sp_0"]);
+  });
+});
+
+/**
+ * What nested transactions leave in the database: a savepoint rolled back
+ * while the transaction around it commits, one released before it commits,
+ * and one released before it rolls back, each from an empty table.
+ */
+async function nestedOutcomes(prisma: PrismaClient): Promise<string[][]> {
+  const user = await prisma.user.create({ data: { email: "ada@example.com", name: "Ada" } });
+  const { id: projectId } = await prisma.project.create({
+    data: { name: "Board", ownerId: user.id },
+  });
+  const task = (id: string) => ({ data: { id, projectId, title: id } });
+  const tasks = async (): Promise<string[]> => {
+    const rows = await prisma.task.findMany({ orderBy: { id: "asc" } });
+    await prisma.task.deleteMany();
+    return rows.map((row) => row.id);
+  };
+  const outcomes: string[][] = [];
+  await prisma.$transaction(async (tx) => {
+    await tx.task.create(task("a"));
+    await tx
+      .$transaction(async (inner) => {
+        await inner.task.create(task("b"));
+        throw new Error("roll the savepoint back");
+      })
+      .catch(() => undefined);
+  });
+  outcomes.push(await tasks());
+  await prisma.$transaction(async (tx) => {
+    await tx.task.create(task("a"));
+    await tx.$transaction(async (inner) => {
+      await inner.task.create(task("b"));
+    });
+  });
+  outcomes.push(await tasks());
+  await prisma
+    .$transaction(async (tx) => {
+      await tx.task.create(task("a"));
+      await tx.$transaction(async (inner) => {
+        await inner.task.create(task("b"));
+      });
+      throw new Error("roll everything back");
+    })
+    .catch(() => undefined);
+  outcomes.push(await tasks());
+  return outcomes;
+}
+
+describe("a nested transaction on a worker's PGlite database", () => {
+  const migrationsDir = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../test/prisma/migrations",
+  );
+  let cacheDir: string;
+
+  beforeAll(() => {
+    cacheDir = mkdtempSync(join(tmpdir(), "quickdraw-testing-savepoints-"));
+  });
+
+  afterAll(() => {
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it("commits and rolls back as on PostgreSQL, through withSavepoints", async () => {
+    const pglite = await openPgliteFromTemplate({
+      migrationsDir,
+      cacheDir,
+      templateName: "savepoints",
+    });
+    const prisma = new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) });
+    try {
+      expect(await nestedOutcomes(prisma)).toEqual([["a"], ["a", "b"], []]);
+    } finally {
+      await prisma.$disconnect();
+      await pglite.close();
+    }
+  }, 60_000);
+
+  it("is refused without it, as pglite-prisma-adapter has no savepoints", async () => {
+    const pglite = await openPgliteFromTemplate({
+      migrationsDir,
+      cacheDir,
+      templateName: "savepoints",
+    });
+    const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+    try {
+      await expect(
+        prisma.$transaction(async (tx) => await tx.$transaction(async () => undefined)),
+      ).rejects.toThrow("createSavepoint is not implemented");
+    } finally {
+      await prisma.$disconnect();
+      await pglite.close();
+    }
+  }, 60_000);
+
+  it.skipIf(process.env.QD_PG_URL === undefined)(
+    "leaves what PostgreSQL leaves (QD_PG_URL)",
+    async () => {
+      const database = await createPostgresTestDatabase(process.env.QD_PG_URL ?? "");
+      try {
+        expect(await nestedOutcomes(database.prisma)).toEqual([["a"], ["a", "b"], []]);
+      } finally {
+        await database.close();
+      }
+    },
+    60_000,
+  );
 });

@@ -4383,14 +4383,20 @@ package gives its test client from it while tests run:
 ```ts
 // this worker's own database: the migrated template, loaded in milliseconds
 const pglite = await openPgliteFromTemplate(TEST_TEMPLATE);
-export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+// withSavepoints: nested transactions (tx.$transaction inside one) run here as on PostgreSQL
+export const prisma = new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) });
 ```
 
 `TEST_TEMPLATE` is `{ migrationsDir, cacheDir, templateName }`, the same the
 global setup builds with (`buildPgliteTemplate(TEST_TEMPLATE)`, or
 `createPrismaTestGlobalSetup`), and a setup file empties the database before
 each test (`beforeEach(() => resetDatabase(prisma))`). Apply `trackPrisma`
-to the test client exactly as in production.
+to the test client exactly as in production. `withSavepoints(factory)`
+gives the adapter's transactions the savepoints Prisma 7 runs a nested
+`tx.$transaction(...)` with, as `@prisma/adapter-pg` runs them, so code that
+nests transactions commits and rolls back on PGlite as on PostgreSQL;
+`pglite-prisma-adapter` has none, and Prisma refuses a nested transaction
+on it without them. An adapter with savepoints of its own keeps them.
 
 ## Observability
 

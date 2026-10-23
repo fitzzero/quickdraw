@@ -77,6 +77,10 @@ await app.close();
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
   (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set; each worker
   boots its PGlite with `openPgliteFromTemplate`, which works under jsdom).
+  Wrap the PGlite adapter in `withSavepoints`
+  (`new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) })`),
+  or a nested `tx.$transaction(...)` is refused there while it passes on
+  PostgreSQL.
 - Seed rows with the untracked client (`prisma`), or inside `qd.run` (before
   the app starts too, when its writes reach no one): a tracked write outside
   any unit of work flushes on its own with an `ambient-write` warning.

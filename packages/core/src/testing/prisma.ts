@@ -15,6 +15,8 @@
  * `pg` and `@electric-sql/pglite` are optional peers, loaded via dynamic
  * import only inside the mode that needs them. App-specific pieces (the
  * generated PrismaClient, adapter choice, seed helpers) stay in the app.
+ * `withSavepoints` wraps the app's driver adapter so a nested transaction
+ * runs on PGlite as on PostgreSQL.
  */
 
 import { Blob as NodeBlob } from "node:buffer";
@@ -109,6 +111,85 @@ export function readMigrationSql(migrationsDir: string): string[] {
   return sqls;
 }
 
+/** The SQL `@prisma/adapter-pg` runs for each savepoint method, under the name Prisma gives it. */
+const SAVEPOINT_SQL = {
+  createSavepoint: (name: string) => `SAVEPOINT ${name}`,
+  rollbackToSavepoint: (name: string) => `ROLLBACK TO SAVEPOINT ${name}`,
+  releaseSavepoint: (name: string) => `RELEASE SAVEPOINT ${name}`,
+} as const;
+
+/** The part of a Prisma driver adapter's transaction the savepoints run on. */
+export interface SavepointTransaction {
+  executeRaw(query: {
+    readonly sql: string;
+    readonly args: unknown[];
+    readonly argTypes: unknown[];
+  }): Promise<number>;
+  createSavepoint?(name: string): Promise<void>;
+  rollbackToSavepoint?(name: string): Promise<void>;
+  releaseSavepoint?(name: string): Promise<void>;
+}
+
+/** The part of a Prisma driver adapter factory {@link withSavepoints} wraps: `new PrismaPGlite(pglite)`. */
+export interface SavepointAdapterFactory {
+  connect(): Promise<{ startTransaction(isolationLevel?: never): Promise<SavepointTransaction> }>;
+}
+
+/** `transaction`, given adapter-pg's savepoint methods unless it has savepoints of its own. */
+function withSavepointMethods<T extends SavepointTransaction>(transaction: T): T {
+  if (
+    transaction.createSavepoint !== undefined ||
+    transaction.rollbackToSavepoint !== undefined ||
+    transaction.releaseSavepoint !== undefined
+  ) {
+    return transaction;
+  }
+  const run = async (sql: string): Promise<void> => {
+    await transaction.executeRaw({ sql, args: [], argTypes: [] });
+  };
+  return Object.assign(transaction, {
+    createSavepoint: (name: string) => run(SAVEPOINT_SQL.createSavepoint(name)),
+    rollbackToSavepoint: (name: string) => run(SAVEPOINT_SQL.rollbackToSavepoint(name)),
+    releaseSavepoint: (name: string) => run(SAVEPOINT_SQL.releaseSavepoint(name)),
+  });
+}
+
+/**
+ * A PostgreSQL driver adapter factory whose transactions can nest. Prisma 7
+ * runs a transaction begun on a transaction's client
+ * (`tx.$transaction(async (inner) => ...)`) as a savepoint, through the
+ * adapter's `createSavepoint`, `rollbackToSavepoint` and `releaseSavepoint`,
+ * and refuses it on an adapter without them, as `pglite-prisma-adapter` 0.7
+ * is. Each transaction the wrapped factory's adapters open gets the three,
+ * running the SQL `@prisma/adapter-pg` runs, which PGlite, a PostgreSQL,
+ * runs as any does; an adapter with savepoints of its own keeps them. Every
+ * other member is the factory's own.
+ *
+ * @example
+ * const pglite = await openPgliteFromTemplate(TEST_TEMPLATE);
+ * export const prisma = new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) });
+ */
+export function withSavepoints<F extends SavepointAdapterFactory>(factory: F): F {
+  const connect = async (): Promise<Awaited<ReturnType<F["connect"]>>> => {
+    const adapter = await factory.connect();
+    const start = adapter.startTransaction.bind(adapter);
+    adapter.startTransaction = async (isolationLevel?: never) =>
+      withSavepointMethods(await start(isolationLevel));
+    return adapter as Awaited<ReturnType<F["connect"]>>;
+  };
+  return new Proxy(factory, {
+    get(target, property) {
+      if (property === "connect") {
+        return connect;
+      }
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    },
+  });
+}
+
 export interface PgliteTemplateOptions {
   /** Absolute path to the Prisma migrations directory. */
   migrationsDir: string;
@@ -174,12 +255,13 @@ export async function buildPgliteTemplate(
  * when it is missing or its migrations changed. The dump is read through
  * Node's `Blob`, so it loads under jsdom too, whose `Blob` has no
  * `arrayBuffer`. Give it to the app's Prisma client
- * (`new PrismaClient({ adapter: new PrismaPGlite(pglite) })`), empty it
- * between tests with `resetDatabase`, and `close()` it after the file.
+ * (`new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) })`,
+ * so nested transactions run), empty it between tests with `resetDatabase`,
+ * and `close()` it after the file.
  *
  * @example
  * const pglite = await openPgliteFromTemplate({ migrationsDir, cacheDir, templateName: "app-test" });
- * export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+ * export const prisma = new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) });
  */
 export async function openPgliteFromTemplate(options: PgliteTemplateOptions): Promise<PGlite> {
   const { templatePath } = await buildPgliteTemplate(options);

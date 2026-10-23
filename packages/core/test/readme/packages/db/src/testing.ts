@@ -3,7 +3,7 @@
 // in-memory PGlite database per test worker, booted from the template the
 // global setup migrated once.
 
-import { openPgliteFromTemplate } from "@fitzzero/quickdraw-core/testing/prisma";
+import { openPgliteFromTemplate, withSavepoints } from "@fitzzero/quickdraw-core/testing/prisma";
 import { PrismaPGlite } from "pglite-prisma-adapter";
 import { PrismaClient } from "../../../../prisma/generated/client";
 import { TEST_TEMPLATE } from "./template";
@@ -13,5 +13,6 @@ export { PrismaClient };
 // #region worker
 // this worker's own database: the migrated template, loaded in milliseconds
 const pglite = await openPgliteFromTemplate(TEST_TEMPLATE);
-export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+// withSavepoints: nested transactions (tx.$transaction inside one) run here as on PostgreSQL
+export const prisma = new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) });
 // #endregion

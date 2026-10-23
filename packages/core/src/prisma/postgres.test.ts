@@ -12,53 +12,30 @@
 //   docker run -d --name qd-pg -e POSTGRES_PASSWORD=pg -p 127.0.0.1:5440:5432 postgres:16-alpine
 //   QD_PG_URL=postgresql://postgres:pg@127.0.0.1:5440/postgres bunx vitest run src/prisma/postgres.test.ts
 
-import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient } from "../../test/prisma/generated/client";
+import {
+  createPostgresTestDatabase,
+  type PostgresTestDatabase,
+  type PrismaClient,
+} from "../../test/prisma/setup";
 import { storageOf } from "../server/storage";
 import type { WriteRecord } from "../server/uow/types";
-import { readMigrationSql, resetDatabase } from "../testing/prisma";
 import { createRecordingSink } from "../testing/recordingSink";
 import type { Tracked } from "./tracked";
 import { trackPrisma } from "./trackPrisma";
 
 const SERVER = process.env.QD_PG_URL;
-const MIGRATIONS = resolve(dirname(fileURLToPath(import.meta.url)), "../../test/prisma/migrations");
 const UNDONE = "roll the transaction back";
 
 describe.skipIf(SERVER === undefined)("the tracked client on PostgreSQL (QD_PG_URL)", () => {
-  const name = `qd_test_${randomUUID().replaceAll("-", "")}`;
+  let database: PostgresTestDatabase;
   let prisma: PrismaClient;
   let db: Tracked<PrismaClient>;
   let projectId = "";
 
-  /** Runs `sql` on the server, or on the test's own database with `own`. */
-  async function admin(sql: readonly string[], own = false): Promise<void> {
-    const { default: pg } = await import("pg");
-    const url = new URL(SERVER ?? "");
-    if (own) {
-      url.pathname = `/${name}`;
-    }
-    const client = new pg.Client({ connectionString: url.toString() });
-    await client.connect();
-    try {
-      for (const statement of sql) {
-        await client.query(statement);
-      }
-    } finally {
-      await client.end();
-    }
-  }
-
   beforeAll(async () => {
-    await admin([`CREATE DATABASE "${name}"`]);
-    await admin(readMigrationSql(MIGRATIONS), true);
-    const { PrismaPg } = await import("@prisma/adapter-pg");
-    const url = new URL(SERVER ?? "");
-    url.pathname = `/${name}`;
-    prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
+    database = await createPostgresTestDatabase(SERVER ?? "");
+    ({ prisma } = database);
     db = trackPrisma(prisma, {
       interest: { task: ["projectId", "status"] },
       development: false,
@@ -66,12 +43,11 @@ describe.skipIf(SERVER === undefined)("the tracked client on PostgreSQL (QD_PG_U
   }, 60_000);
 
   afterAll(async () => {
-    await prisma.$disconnect();
-    await admin([`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`]);
+    await database.close();
   });
 
   beforeEach(async () => {
-    await resetDatabase(prisma);
+    await database.reset();
     const user = await prisma.user.create({ data: { email: "ada@example.com", name: "Ada" } });
     projectId = (await prisma.project.create({ data: { name: "Board", ownerId: user.id } })).id;
   });
