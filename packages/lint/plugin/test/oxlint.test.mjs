@@ -65,6 +65,10 @@ const EXAMPLES = {
     "apps/api/src/services/guard.ts",
     `export const m = { access: "public", handler: ({ ctx }) => { if (!ctx.principal) throw new Error("no"); } };\n`,
   ],
+  "no-plain-error-refusal": [
+    "apps/api/src/server.ts",
+    `export const server = qd.createServer({ app, auth: { authenticate: () => { throw new Error("No session"); } } });\n`,
+  ],
   "no-unbounded-read": [
     "apps/api/src/services/unbounded.ts",
     `export const m = ({ db }) => db.task.findMany();\n`,

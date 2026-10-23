@@ -75,7 +75,10 @@ For calls alone a socket is not needed: the HTTP transport answers
 `POST /qd/{service}/{method}` with the input as a JSON body (sent with
 `Content-Type: application/json`, a bearer token or the session cookie) in
 the same `{ ok, d }` or `{ ok: false, e }` shape, with the error code's HTTP
-status.
+status. Credentials the server refuses are answered `UNAUTHENTICATED`
+(401): sign in again. Credentials it could not check (its session store
+down) are answered `INTERNAL` (500), as a socket's handshake is refused
+`INTERNAL` then: keep the user, and try again later.
 
 ## Rooms for games and lobbies
 

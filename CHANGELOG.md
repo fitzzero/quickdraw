@@ -429,7 +429,33 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   principal, an app's bug, is now `INTERNAL`). An `authenticate` that
   throws a plain `Error` for bad credentials should throw
   `QuickdrawError("UNAUTHENTICATED")` instead, or quickdraw's client keeps
-  retrying it. HTTP calls are answered as before.
+  retrying it. HTTP calls follow the same rule (below).
+- **Behavior change: an HTTP call whose `authenticate` cannot run is
+  answered `INTERNAL` (500), not `UNAUTHENTICATED` (401).** The HTTP
+  transport answered every failure of `authenticate` and
+  `loadServiceAccess` with 401, an outage of the session store included,
+  so a server render (`createServerCaller`) that sends `UNAUTHENTICATED`
+  to the sign-in page sent its user there for a database blip. It now
+  follows the socket handshake's rule: a `QuickdrawError`
+  `UNAUTHENTICATED` is answered 401 and a `FORBIDDEN` 403, as before
+  (logged at debug), and anything else
+  `{ code: "INTERNAL", message: "Internal error" }` with 500 (logged at
+  error, as before), which `createServerCaller` rejects with. `INTERNAL`,
+  rather than a 503 with `retryAfterMs`: it is the code both transports
+  already answer the server's failures with, a reply's status is always
+  its code's, and the server cannot know when its store is back.
+  `createHttpRouter` answers the same.
+- **A development warning names an `authenticate` that throws a plain
+  error.** Since the change above, a plain `Error` thrown for bad
+  credentials reads as an outage: the client keeps the user and retries
+  for ever. While `NODE_ENV` is not `"production"`, the server now logs
+  `[quickdraw:authenticate-threw]` once (per server, under
+  `category: "quickdraw.dev"`) when `authenticate` throws anything but a
+  `QuickdrawError`, naming the fix: throw
+  `QuickdrawError("UNAUTHENTICATED")` to refuse, or return `null` for an
+  anonymous caller. It comes before any call, so a strict test app logs it
+  rather than throwing it. A `QuickdrawError` of any code is never warned
+  about; `socketAuth` refuses with one.
 
 ### Testing
 
@@ -457,6 +483,16 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   and `no-nested-write` and `no-foreign-write` check them as `db`'s. A name
   in `clients` declared without such a type is still reported, and the
   rule's message says how to type a parameter given the tracked client.
+- **`no-plain-error-refusal`** reports a plain error thrown to refuse
+  credentials: `throw new Error(...)` (or another built-in error, with or
+  without `new`) in a function given as `auth.authenticate` to
+  `createServer` (`qd.createServer`) or `createHttpRouter`, or as
+  `loadPrincipal` to `socketAuth`, written there or declared in the same
+  file. A throw inside a nested function, a `try` with a `catch` or a
+  `catch` clause is left alone, and so is an error class of the app's. An
+  `authenticate` imported from another module is not seen; the warning
+  above covers it. A warning in the base config, so an upgrade never
+  breaks lint.
 
 ### Codemod
 

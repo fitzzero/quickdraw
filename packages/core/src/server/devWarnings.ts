@@ -40,6 +40,10 @@
 // | requires`            | `access`, so every signed-in user may send it                      |                          |
 // |                      | (`realtime/channelWarnings.ts`); raised when a dispatcher is made, |                          |
 // |                      | so a strict test app fails to start                                 |                          |
+// | `authenticate-threw` | the server's `authenticate` threw anything but a `QuickdrawError`, | none (once per server)   |
+// |                      | which both transports take for the server's failure (`INTERNAL`),  |                          |
+// |                      | so a refusal made that way never signs a client out                |                          |
+// |                      | (`transports/auth.ts`); outside any call, so never strict           |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
@@ -74,7 +78,8 @@ export type DevWarningKind =
   | "resolver-without-reads"
   | "untracked-access-model"
   | "shared-principal"
-  | "channel-without-requires";
+  | "channel-without-requires"
+  | "authenticate-threw";
 
 /** One development warning. */
 export interface DevWarning {

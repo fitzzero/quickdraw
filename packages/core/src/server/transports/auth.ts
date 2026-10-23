@@ -8,19 +8,16 @@
 
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { Socket } from "socket.io";
-import type { AccessLevel } from "../../contract/access";
 import { errorText, type Logger } from "../../contract/logger";
 import { QuickdrawError } from "../../protocol/errors";
+import { createDevWarnings, type DevWarning } from "../devWarnings";
 import { modelKey } from "../storage";
-import type { MaybePromise, Principal } from "../types";
+import type { MaybePromise, Principal, ServiceGrants } from "../types";
 import type { FlushSink } from "../uow/flushSink";
 import { ANY_FIELD } from "../uow/types";
 import type { HttpCredentialSource } from "./body";
 
-export type { HttpCredentialSource };
-
-/** A principal's service-wide grants by service name: `{ taskService: "Admin" }`. */
-export type ServiceGrants = Readonly<Record<string, AccessLevel>>;
+export type { HttpCredentialSource, ServiceGrants };
 
 interface AuthenticateRequestBase {
   /**
@@ -84,15 +81,18 @@ export type AuthenticateResult<P extends Principal> =
 export interface ServerAuth<P extends Principal = Principal> {
   /**
    * Says who is calling. Throwing refuses the socket connection ("Authentication
-   * failed") or answers the HTTP call with `UNAUTHENTICATED`; returning
-   * nothing lets the caller in anonymously, so only `"public"` methods pass.
+   * failed") or fails the HTTP call; returning nothing lets the caller in
+   * anonymously, so only `"public"` methods pass.
    * Throw a `QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) for a
-   * refusal that is the caller's doing: it logs at debug, and a socket's
+   * refusal that is the caller's doing: it logs at debug, a socket's
    * `connect_error` data is `{ code: "UNAUTHENTICATED" }`, which signs a
-   * client out. Anything else thrown is the server's failure (its session
-   * store down, say): it logs at error, and the data is `{ code: "INTERNAL" }`,
-   * which a client retries, keeping the user, so never throw a plain `Error`
-   * for bad credentials.
+   * client out, and an HTTP call is answered `UNAUTHENTICATED` (401).
+   * Anything else thrown is the server's failure (its session store down,
+   * say): it logs at error, the socket's data is `{ code: "INTERNAL" }`,
+   * which a client retries, keeping the user, and an HTTP call is answered
+   * `INTERNAL` (500). So never throw a plain `Error` for bad credentials: in
+   * development the server warns once when `authenticate` throws anything
+   * but a `QuickdrawError` (`[quickdraw:authenticate-threw]`).
    * On an HTTP call a thrown `QuickdrawError("FORBIDDEN", ...)` is answered
    * as it is, with 403 (logged at debug): a credential the request may not
    * use from where it came, as `socketAuth` answers a session cookie sent
@@ -201,8 +201,9 @@ export function socketAuthOf(authenticate: unknown): SocketAuthInfo | undefined 
  * `QuickdrawError` with code `UNAUTHENTICATED` (a revoked session, a socket
  * from a page the cookie may not be used from). The transports log those,
  * and `isForbiddenCredential`'s, at debug, as the client's doing, and every
- * other failure at error; the socket transport refuses another failure's
- * handshake with `INTERNAL`, since the credentials may well be good.
+ * other failure at error; they answer another failure with `INTERNAL` (a
+ * socket's handshake, an HTTP call's 500), since the credentials may well
+ * be good.
  */
 export function isRefusal(error: unknown): boolean {
   return error instanceof QuickdrawError && error.code === "UNAUTHENTICATED";
@@ -249,17 +250,55 @@ export function toPrincipal(result: unknown): Principal | null {
   );
 }
 
-/** Builds the function both transports authenticate with. */
+/**
+ * The development warning for an `authenticate` that threw `error`, anything
+ * but a `QuickdrawError`: the transports take it for the server's failure, so
+ * a refusal made that way never signs a client out (it retries for ever).
+ */
+function threwWarning(error: unknown): DevWarning {
+  const thrown = error instanceof Error ? error.name : typeof error;
+  return {
+    kind: "authenticate-threw",
+    message:
+      `authenticate threw something other than a QuickdrawError (${thrown}), which the server takes for its own failure, as when its session store is down: ` +
+      "a socket's handshake is refused INTERNAL, and the quickdraw client keeps the user and connects again, for ever if the credentials are bad; " +
+      'an HTTP call is answered INTERNAL (500). To refuse the credentials, throw new QuickdrawError("UNAUTHENTICATED", ...), which signs the client out, ' +
+      "or return null to let the caller in anonymously",
+    meta: { thrown },
+  };
+}
+
+/**
+ * Builds the function both transports authenticate with (`createServer`
+ * makes one for both, `createHttpRouter` its own). While `NODE_ENV` is not
+ * `"production"`, an `authenticate` that throws anything but a
+ * `QuickdrawError` is warned about to `logger` (`authenticate-threw`), once
+ * per resolver. The warning goes through a sink of the resolver's own, which
+ * never throws it, even in a strict test app (whose method calls throw their
+ * warnings): a handshake or a request is not a call yet.
+ */
 export function createPrincipalResolver<P extends Principal>(
   auth: ServerAuth<P> | undefined,
+  logger: Logger,
 ): ResolvePrincipal {
   const authenticate = auth?.authenticate;
   const loadServiceAccess = auth?.loadServiceAccess;
+  const warnings = createDevWarnings({ logger });
+  const asked = async (request: AuthenticateRequest): Promise<unknown> => {
+    try {
+      return await authenticate?.(request);
+    } catch (error) {
+      if (!(error instanceof QuickdrawError)) {
+        warnings.warn(threwWarning(error));
+      }
+      throw error;
+    }
+  };
   return async (request) => {
     if (authenticate === undefined) {
       return null;
     }
-    const principal = toPrincipal(await authenticate(request));
+    const principal = toPrincipal(await asked(request));
     const carried = principal?.serviceAccess;
     if (principal === null || (carried !== undefined && carried !== null)) {
       return principal;

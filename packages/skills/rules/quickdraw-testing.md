@@ -180,7 +180,11 @@ declared `access`) are thrown by `createTestApp` itself: answer `"entity"`
 from that method, declare the resolver's `reads`, give the table an `id`,
 or give the channel a `requires` (or `access: "authenticated"` when any
 signed-in user may send it), rather than turning strictness off.
-Turn it on for service suites.
+Turn it on for service suites. `authenticate-threw` (the app's
+`authenticate` threw anything but a `QuickdrawError`) comes from a
+handshake or an HTTP request, before any call, so it is logged, never
+thrown, strict or not: refuse with `QuickdrawError("UNAUTHENTICATED")`
+instead, unless the test means an outage.
 `createRecordingSink()` passed as `flushSink` records what each flush wrote.
 
 ## Components

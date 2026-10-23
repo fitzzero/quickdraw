@@ -141,6 +141,30 @@ describe("createTestApp", () => {
     await expect(app.connect(alice)).rejects.toThrow("Authentication failed");
   });
 
+  it("logs authenticate-threw once, and never throws it, even when strict: it is no call's", async () => {
+    const logger = captureLogger();
+    const app = await createTestApp({
+      services: [qd.defineService(task, { methods: taskDefaults })],
+      db,
+      strictWarnings: true,
+      auth: {
+        authenticate: () => {
+          throw new Error("no sessions in this test");
+        },
+      },
+      logger,
+    });
+    apps.push(app as unknown as TestApp);
+    await expect(app.connect(alice)).rejects.toThrow("Authentication failed");
+    await expect(app.connect(alice)).rejects.toThrow("Authentication failed");
+    // A strict app throws its warnings instead of logging them: this one was logged.
+    expect(
+      logger
+        .at("warn")
+        .filter((entry) => entry.message.startsWith("[quickdraw:authenticate-threw]")),
+    ).toHaveLength(1);
+  });
+
   it("gives an in-process caller the grants a socket of the same principal gets", async () => {
     const stored: Record<string, Record<string, "Read" | "Moderate" | "Admin">> = {
       alice: { probeService: "Moderate" },

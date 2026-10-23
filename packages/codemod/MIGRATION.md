@@ -1097,7 +1097,10 @@ a signed-out session still passes until its JWT expires. Its
 `authenticate` refuses credentials by throwing
 `QuickdrawError("UNAUTHENTICATED")`: anything else it throws is taken for
 the server's failure (a socket's handshake is refused `INTERNAL`, and the
-client keeps the user and connects again by itself).
+client keeps the user and connects again by itself; an HTTP call is
+answered `INTERNAL`), which the server warns about in development
+(`[quickdraw:authenticate-threw]`) and lint's `no-plain-error-refusal`
+reports.
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/index.ts#server -->
 

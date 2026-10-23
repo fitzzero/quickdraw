@@ -1403,12 +1403,20 @@ over three transports (design: sections 3, 8 and 10):
 `authenticate` takes one request (`{ transport, auth, headers, socket | req }`,
 plus `credential` and `sessionCookie` on HTTP) for both transports and
 returns a principal, a user id, or nothing for an anonymous caller; throwing
-`QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) refuses. Anything
-else it, or `loadServiceAccess`, throws is the server's failure (its session
-store or database down): a socket's handshake is refused `INTERNAL`, and a
-quickdraw client keeps the user and connects again by itself, while an HTTP
-call is answered `UNAUTHENTICATED`, as before. On HTTP the session cookie
-is in `auth.token` only for `socketAuth`'s `authenticate`.
+`QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) refuses: a
+socket's handshake is refused `UNAUTHENTICATED`, which signs a quickdraw
+client out, and an HTTP call is answered 401 (403 for `FORBIDDEN`).
+Anything else it, or `loadServiceAccess`, throws is the server's failure
+(its session store or database down): a socket's handshake is refused
+`INTERNAL`, and a quickdraw client keeps the user and connects again by
+itself, and an HTTP call is answered `INTERNAL` (500), which
+`createServerCaller` rejects with. So a plain `Error` thrown for bad
+credentials signs nobody out: in development the server warns once when
+`authenticate` throws anything but a `QuickdrawError`
+(`[quickdraw:authenticate-threw]`), and lint's `no-plain-error-refusal`
+reports one thrown in an `authenticate` (or `socketAuth`'s `loadPrincipal`)
+written where the server is made. On HTTP the session cookie is in
+`auth.token` only for `socketAuth`'s `authenticate`.
 Pass your own HTTP server as `httpServer` together with the `app` it was
 created from (or with `http: false`).
 
@@ -4178,10 +4186,11 @@ What it does with them:
 
 While `NODE_ENV` is not `"production"`, a running app warns about the slow
 and untracked patterns lint cannot see, as they happen. Every warning has
-one format and names the method call it happened in (one exception:
+one format and names the method call it happened in (two exceptions:
 `untracked-access-model` is checked as the server starts and logged as an
 error under `category: "quickdraw.access"`, in every environment, at each
-start):
+start, and `authenticate-threw` comes from a handshake or an HTTP request,
+before any call):
 
 ```text
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
@@ -4202,6 +4211,7 @@ start):
 | `untracked-access-model`   | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
 | `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access`: the run has the first caller's, and every caller gets its result                             |
 | `channel-without-requires` | a channel's contract declares no `requires` and its service no `access`, so every signed-in user may send it; raised when the server is made                                                                              |
+| `authenticate-threw`       | the server's `authenticate` threw anything but a `QuickdrawError`, which both transports take for the server's failure (`INTERNAL`), so a refusal made that way never signs a client out; once per server                 |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -4220,8 +4230,9 @@ fails: the call it happened in fails with `INTERNAL` and the error as its
 `cause`, and an in-process call whose reply was oversized rejects with it
 once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
-warnings outside its calls (an ambient write while seeding, another app's
-calls) are logged as usual, and `app.close()` ends it. The ones raised when
+warnings outside its calls (an ambient write while seeding, an
+`authenticate` that threw, another app's calls) are logged as usual, and
+`app.close()` ends it. The ones raised when
 the app is made, `tiered-field-in-output`, `resolver-without-reads`,
 `untracked-access-model` and `channel-without-requires`, are thrown from
 `createTestApp` itself, so a strict app over such a method, policy, table

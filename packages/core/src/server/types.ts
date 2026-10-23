@@ -5,6 +5,9 @@
 import type { AccessLevel } from "../contract/access";
 import type { ContractMap } from "../contract/infer";
 
+/** A principal's service-wide grants by service name: `{ taskService: "Admin" }`. */
+export type ServiceGrants = Readonly<Record<string, AccessLevel>>;
+
 /**
  * Who is calling. A transport authenticates the connection or request and
  * hands the dispatcher a principal, or `null` for an anonymous caller. An app

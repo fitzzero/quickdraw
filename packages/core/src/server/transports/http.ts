@@ -11,7 +11,10 @@
 // (the 5.1 audit's AUTH-1/CLIENT-2). The reply is the `qd:call`
 // acknowledgement shape, `{ ok: true, d }` or `{ ok: false, e }`, with the
 // error code's HTTP status (`httpStatus`). The call is cancelled when the
-// client goes away.
+// client goes away. A refusal `authenticate` makes on purpose is answered
+// `UNAUTHENTICATED` (401), or its `FORBIDDEN` as it is (403), and any other
+// failure `INTERNAL` (500), the server's own, as a socket's handshake is
+// refused `INTERNAL` for it.
 //
 // The router is a plain Node request handler rather than an `express.Router`,
 // so it never imports Express: it mounts with `app.use(router)` on Express 4
@@ -237,13 +240,20 @@ async function authenticate(
     });
   } catch (error) {
     const forbidden = isForbiddenCredential(error);
-    settings.logger[isRefusal(error) || forbidden ? "debug" : "error"](
-      "HTTP authentication failed",
-      { category: "quickdraw.http", error: describeError(error) },
-    );
-    return forbidden
-      ? new QuickdrawError("FORBIDDEN", error.message)
-      : new QuickdrawError("UNAUTHENTICATED", "Authentication failed");
+    const refused = isRefusal(error) || forbidden;
+    settings.logger[refused ? "debug" : "error"]("HTTP authentication failed", {
+      category: "quickdraw.http",
+      error: describeError(error),
+    });
+    if (forbidden) {
+      return new QuickdrawError("FORBIDDEN", error.message);
+    }
+    // Anything but a refusal is the server's failure (its session store down, say), as a
+    // socket's handshake takes it: the credentials may well be good, so the caller is not told
+    // they are not.
+    return refused
+      ? new QuickdrawError("UNAUTHENTICATED", "Authentication failed")
+      : new QuickdrawError("INTERNAL", INTERNAL_MESSAGE);
   }
 }
 
@@ -404,11 +414,12 @@ export function createHttpRouter<P extends Principal = Principal>(
   options: HttpRouterOptions<P>,
 ): HttpRouter {
   checkGrantsSource(options.dispatcher.serviceAccessSource, options.auth?.serviceAccessSource);
+  const logger = options.logger ?? consoleLogger;
   return httpRouter(
     httpRouterSettings(options, {
       call: options.dispatcher.call,
-      resolvePrincipal: createPrincipalResolver(options.auth),
-      logger: options.logger ?? consoleLogger,
+      resolvePrincipal: createPrincipalResolver(options.auth, logger),
+      logger,
       cookieAsToken: socketAuthOf(options.auth?.authenticate) !== undefined,
     }),
   );
