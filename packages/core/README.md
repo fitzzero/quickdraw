@@ -916,11 +916,14 @@ export const taskService = qd.defineService(task, {
   requests; tracked writes to the columns and membership tables the policies
   read evict them as soon as the write is durable (a transaction's at its
   commit, a rolled-back one never), so a check later in the same call sees
-  it, as does any other request on that node. The other nodes of a cluster
-  evict when the write's flush broadcasts its access change, after the call.
-  Writes the tracked client cannot see are picked up only when the time
-  passes, so the cache is off by default. A lookup inside a transaction
-  (`db.$transaction`, a sharing change) reads the database, never the cache.
+  it, as does any other request on that node. Servers behind a cluster
+  adapter evict when the write's flush broadcasts its access change, after
+  the call. A process that broadcasts nothing (a job on a bare
+  `createDispatcher`, or a server without a cluster adapter) reaches other
+  processes' caches only when the time passes, as do writes the tracked
+  client cannot see, so the cache is off by default. A lookup inside a
+  transaction (`db.$transaction`, a sharing change) reads the database,
+  never the cache.
 
 ## Tracked writes
 

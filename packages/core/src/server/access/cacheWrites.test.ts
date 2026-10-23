@@ -7,7 +7,8 @@
 // writes at its commit (a savepoint's when the transaction around it
 // commits), and a rolled-back write never: the cache then keeps what it
 // held, which is still right. A closed server stops hearing the client's
-// writes.
+// writes, a dispatcher whose construction throws never starts, and
+// `cacheMs` refuses a storage adapter that cannot report them.
 //
 //            owner   access list    members
 //   P1       ada     di: Read       bo: Moderate, cy: Read
@@ -23,9 +24,11 @@ import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { createTestApp, type TestApp } from "../../testing/index";
 import { deferred, type Deferred } from "../__tests__/fixtures";
 import type { BaseContext } from "../context";
+import { detachDispatcher } from "../dispatcher";
 import { anyOf, initQuickdraw, jsonAcl, type Principal, type StorageAdapter } from "../index";
 import type { WriteRecord } from "../uow/types";
 import { as, projectMembers, seedBoard, type Board } from "./__tests__/board";
+import type { ContextAccess } from "./api";
 
 /** How `leave` deletes the caller's membership row. */
 const how = z.enum([
@@ -67,6 +70,12 @@ const projects = defineContract("projectService", {
       input: z.object({ id: z.string(), userId: z.string() }),
       output: z.null(),
     }),
+    // The caller deletes the project (the database deletes its memberships, unseen), then asks
+    // ctx.access for their level on it.
+    remove: mutation({ input: z.object({ id: z.string() }), output: seen }),
+    // The caller creates a project with the id given, owned by Ed, then asks ctx.access for their
+    // level on it.
+    recreate: mutation({ input: z.object({ projectId: z.string() }), output: seen }),
   },
 });
 
@@ -134,6 +143,14 @@ async function outcome(call: Promise<unknown>): Promise<string> {
   }
 }
 
+/** The caller's level on `id` through ctx.access, and the statements it read that with. */
+async function levelAfter(access: ContextAccess, id: string): Promise<z.infer<typeof seen>> {
+  const { value, statements } = await h.storage.countStatements(() =>
+    access.levelsFor(projects, [id]),
+  );
+  return { level: value.get(id) ?? null, reads: statements };
+}
+
 const projectService = qd.defineService(projects, {
   model: "project",
   access: anyOf(jsonAcl("acl", { owner: "ownerId" }), projectMembers),
@@ -149,10 +166,21 @@ const projectService = qd.defineService(projects, {
       handler: async ({ input, ctx, db }) => {
         const member = { projectId: input.id, userId: ctx.principal.userId };
         await leave(db, ctx.touch, member, input.how);
-        const { value, statements } = await h.storage.countStatements(() =>
-          ctx.access.levelsFor(projects, [input.id]),
-        );
-        return { level: value.get(input.id) ?? null, reads: statements };
+        return await levelAfter(ctx.access, input.id);
+      },
+    },
+    remove: {
+      access: { entry: "Moderate" },
+      handler: async ({ input, ctx, db }) => {
+        await db.project.delete({ where: { id: input.id } });
+        return await levelAfter(ctx.access, input.id);
+      },
+    },
+    recreate: {
+      access: "authenticated",
+      handler: async ({ input, ctx, db }) => {
+        await db.project.create({ data: { id: input.projectId, name: "P1", ownerId: board.ed } });
+        return await levelAfter(ctx.access, input.projectId);
       },
     },
     leaveThenGet: {
@@ -288,6 +316,31 @@ describe("a transaction's writes", () => {
   );
 });
 
+describe("a row with memberships, created or deleted in the call", () => {
+  it("evicts every member's level on it when it is deleted, with the memberships it cascades to", async () => {
+    const app = await start();
+    // The method's own check kept Bo's Moderate. The database deletes his membership with the
+    // row, unseen: the row's delete evicts it, so both the row and the membership are read again.
+    expect(await app.as(as(board.bo)).projectService.remove({ id: board.p1 })).toEqual({
+      level: null,
+      reads: 2,
+    });
+  });
+
+  it("evicts every level kept for its id when it is created again", async () => {
+    const app = await start();
+    expect(await lookupOf(app, board.cy, board.p1)).toEqual([2, "Read"]);
+    // A delete the tracked client does not see leaves Cy's Read on P1 in the cache...
+    await h.prisma.project.delete({ where: { id: board.p1 } });
+    expect(await lookupOf(app, board.cy, board.p1)).toEqual([0, "Read"]);
+    // ...until a row with that id is created again: Cy has no level on the new one.
+    expect(await app.as(as(board.cy)).projectService.recreate({ projectId: board.p1 })).toEqual({
+      level: null,
+      reads: 2,
+    });
+  });
+});
+
 describe("another request on the node", () => {
   it("is refused while the call that removed its membership runs on, before that call flushes", async () => {
     const app = await start();
@@ -385,5 +438,81 @@ describe("the write listener", () => {
     // The tracked client serves other dispatchers on: their writes no longer reach this one.
     await h.inUnit(() => h.db.project.update({ where: { id: board.p1 }, data: { name: "Again" } }));
     expect(spied.heard).toHaveLength(1);
+  });
+
+  it("is never added by a dispatcher whose construction throws, so none is left behind", () => {
+    const spied = spiedStorage();
+    expect(() =>
+      qd.createDispatcher({
+        services: [projectService],
+        db: h.db,
+        storage: spied.storage,
+        access: { cacheMs: 60_000 },
+        limits: { maxInFlightQueries: -1 },
+      }),
+    ).toThrow("limits.maxInFlightQueries");
+    expect(spied.stops).toHaveLength(0);
+  });
+
+  it("is removed once, however often the dispatcher is detached", () => {
+    const spied = spiedStorage();
+    const dispatcher = qd.createDispatcher({
+      services: [projectService],
+      db: h.db,
+      storage: spied.storage,
+      access: { cacheMs: 60_000 },
+    });
+    expect(spied.stops).toHaveLength(1);
+    detachDispatcher(dispatcher);
+    detachDispatcher(dispatcher);
+    expect(spied.stops[0]).toHaveBeenCalledOnce();
+  });
+
+  it("detaches the dispatcher from the tracked client even when removing the listener throws", () => {
+    const detached = vi.fn();
+    const storage: StorageAdapter = {
+      ...h.storage,
+      onWrite: () => () => {
+        throw new Error("unsubscribe broke");
+      },
+      unitOfWork: {
+        ...h.storage.unitOfWork,
+        attach(sink, logger, warnings) {
+          const detach = h.storage.unitOfWork.attach?.(sink, logger, warnings);
+          return () => {
+            detached();
+            if (typeof detach === "function") {
+              detach();
+            }
+          };
+        },
+      },
+    };
+    const dispatcher = qd.createDispatcher({
+      services: [projectService],
+      db: h.db,
+      storage,
+      access: { cacheMs: 60_000 },
+    });
+    expect(() => detachDispatcher(dispatcher)).toThrow("unsubscribe broke");
+    expect(detached).toHaveBeenCalledOnce();
+  });
+
+  it("needs the storage adapter's onWrite with cacheMs, and only then", () => {
+    const storage = { ...h.storage, onWrite: undefined } as unknown as StorageAdapter;
+    const make = (cacheMs?: number) =>
+      qd.createDispatcher({
+        services: [projectService],
+        db: h.db,
+        storage,
+        ...(cacheMs === undefined ? {} : { access: { cacheMs } }),
+      });
+    expect(() => make(60_000)).toThrow(
+      new TypeError(
+        "createDispatcher: access.cacheMs needs the storage adapter's onWrite(listener) (trackPrisma's has it); an adapter that cannot report writes can pass onWrite: () => () => {} to evict only at the flush",
+      ),
+    );
+    // Without the cache nothing listens, and the dispatcher is made.
+    detachDispatcher(make());
   });
 });

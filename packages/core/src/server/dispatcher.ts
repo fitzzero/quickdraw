@@ -320,12 +320,19 @@ export function createDispatcher<const S extends readonly AnyService[]>(
   registerLive(dispatcher, settings.live);
   LOOPS.set(dispatcher, settings.loops);
   DETACHES.set(dispatcher, () => {
-    // The access cache stops hearing the client's writes, which other dispatchers go on making.
-    settings.policies.close();
-    if (typeof detach === "function") {
-      detach();
+    // The access cache stops hearing the client's writes, which other dispatchers go on making;
+    // the tracker detaches even when that throws.
+    try {
+      settings.policies.close();
+    } finally {
+      if (typeof detach === "function") {
+        detach();
+      }
     }
   });
+  // Last, so a construction that throws leaves no listener behind; it is synchronous, so no
+  // write lands before this. From here the access cache hears the client's writes.
+  settings.policies.listen();
   return dispatcher;
 }
 

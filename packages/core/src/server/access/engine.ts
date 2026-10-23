@@ -35,6 +35,7 @@ import {
   forgetAccess,
   type AccessChangeListener,
   type Forgotten,
+  type WriteEvictor,
 } from "./changes";
 import { createRowAccess } from "./rowAccess";
 
@@ -46,12 +47,15 @@ export interface AccessOptions {
    * the columns and models the policies read evict what they change as soon
    * as the write is durable (a transaction's at its commit, a rolled-back
    * one never), so a check later in the same call sees it, as does any other
-   * request in this process; the other nodes of a cluster evict when the
-   * write's flush broadcasts its access change, after the call. Writes the
+   * request in this process. A server behind a cluster adapter broadcasts
+   * each flush's access changes, and the other servers evict them then,
+   * after the call. A process that broadcasts nothing reaches other
+   * processes' caches only once the time passes: a bare `createDispatcher`,
+   * as a job runs one, has no Socket.IO server to broadcast through, and a
+   * server broadcasts only behind a cluster adapter. So do writes the
    * tracked client cannot see (raw SQL without `ctx.touch`, database
-   * cascades, processes outside the cluster) are seen only once the time
-   * passes. Default: off, every request reads afresh (lookups are always
-   * memoized within one).
+   * cascades). Needs the storage adapter's `onWrite`. Default: off, every
+   * request reads afresh (lookups are always memoized within one).
    */
   readonly cacheMs?: number;
 }
@@ -74,9 +78,46 @@ function checkCacheMs(cacheMs: unknown): number | undefined {
 }
 
 /**
+ * How the engine hears the storage adapter's writes with `cacheMs`
+ * (`createWriteEvictor`): `listen` registers the evictor, at most once, and
+ * `close` removes it, at most once, after which `listen` does nothing. A
+ * `TypeError` for an adapter without `onWrite`: falling back to eviction at
+ * the flush alone would let a check later in the writing call pass on what
+ * the call itself already changed.
+ */
+function hearWrites(
+  evictor: WriteEvictor | undefined,
+  storage: StorageAdapter | undefined,
+): Pick<PolicyEngine, "listen" | "close"> {
+  if (evictor === undefined || storage === undefined) {
+    return { listen: () => undefined, close: () => undefined };
+  }
+  if (typeof (storage as Partial<StorageAdapter>).onWrite !== "function") {
+    throw new TypeError(
+      "createDispatcher: access.cacheMs needs the storage adapter's onWrite(listener) (trackPrisma's has it); an adapter that cannot report writes can pass onWrite: () => () => {} to evict only at the flush",
+    );
+  }
+  let stop: (() => void) | undefined;
+  let closed = false;
+  return {
+    listen() {
+      if (stop === undefined && !closed) {
+        stop = storage.onWrite(evictor);
+      }
+    },
+    close() {
+      closed = true;
+      const unsubscribe = stop;
+      stop = undefined;
+      unsubscribe?.();
+    },
+  };
+}
+
+/**
  * Binds the services' access policies (`bindings.ts`; throws a `TypeError`
  * for one that could not be evaluated) and returns the engine that
- * evaluates them.
+ * evaluates them. With `cacheMs` it hears no write until `listen`.
  */
 export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
   const cacheMs = checkCacheMs(options.cacheMs);
@@ -87,9 +128,8 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
     cache: cacheMs === undefined ? undefined : createAccessCache({ ttlMs: cacheMs }),
   };
   // With a cache, each tracked write evicts what it changes once it is durable, not only at its
-  // flush (`changes.ts`); `close` stops that, for a client that outlives this dispatcher.
-  const evictor = createWriteEvictor(bindings, state.cache);
-  const stop = evictor === undefined ? undefined : options.storage?.onWrite(evictor);
+  // flush (`changes.ts`), from `listen` until `close`: a client outlives its dispatchers.
+  const writes = hearWrites(createWriteEvictor(bindings, state.cache), options.storage);
   const listeners = new Set<AccessChangeListener>();
   return Object.freeze({
     ...createAccessApi(state),
@@ -107,8 +147,7 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
     rows: createRowAccess(state),
     sink: createChangeSink(bindings, state.cache, listeners, options.logger),
     forget: (forgotten: Forgotten) => forgetAccess(bindings, state.cache, forgotten),
-    close: () => {
-      stop?.();
-    },
+    listen: writes.listen,
+    close: writes.close,
   });
 }

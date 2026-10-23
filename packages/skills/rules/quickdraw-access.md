@@ -250,8 +250,10 @@ compile time.
   writes to the columns and tables a policy reads evict them as soon as the
   write is durable (a transaction's at its commit), so a check later in the
   same call (`ctx.access`, a `ctx.services` call) sees the call's own write.
-  Other nodes of a cluster evict when the write's flush broadcasts it. A
-  lookup inside a transaction always reads the database.
+  Servers behind a cluster adapter evict when the write's flush broadcasts
+  it. A job on a bare `createDispatcher` broadcasts nothing, so its writes
+  reach the servers' caches only after `cacheMs`. A lookup inside a
+  transaction always reads the database.
 - Membership and junction tables need an `id` column
   (`id String @id @default(cuid())`, the pair unique by `@@unique`), never a
   composite `@@id`: the write tracker keys rows by `id`, so such a table is

@@ -405,9 +405,14 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   transaction around it commits), and a rolled-back write never, which leaves
   the cache as it was. A write made through another dispatcher on the same
   tracked client evicts too. The flush still evicts again, and revocation
-  and `onAccessChanged` still happen at the flush. The other nodes of a
-  cluster still evict when the flush's access change reaches them. Apps
-  without `cacheMs` are unchanged.
+  and `onAccessChanged` still happen at the flush. Servers behind a cluster
+  adapter still evict when the flush's access change reaches them, and a job
+  on a bare `createDispatcher` still broadcasts nothing, so its writes reach
+  the servers' caches only after `cacheMs`. `cacheMs` now needs the storage
+  adapter's `onWrite` (`trackPrisma`'s has it): an adapter without one is a
+  `TypeError` from `createDispatcher`, and one that cannot report writes can
+  pass `onWrite: () => () => {}` to evict only at the flush. Apps without
+  `cacheMs` are unchanged.
 - **A collection can require a service grant.** `collections: { mine:
 { scopeAccess: "self", requires: { service: "Read" } } }` in
   `defineService` gives a list the grant its methods ask for: besides the
