@@ -35,7 +35,9 @@ or pass `createAdapter(pub, sub, { key: "myapp" })` from
 `@socket.io/redis-adapter` as `socket.adapter` to `createServer` (its own
 default key is `"socket.io"`, so name it; an adapter an app sets later with
 `io.adapter(...)` itself misses the watch on its connections described in
-"When Valkey stops answering"). Either way the server finds the adapter's
+"When Valkey stops answering", and the room hosts the other nodes held
+when the node started: "Room hosts" in "What holds across nodes"). Either
+way the server finds the adapter's
 publishing client and keeps two kinds of keys there:
 
 | Key                         | What                                                                      |
@@ -206,6 +208,16 @@ sockets count as 0 until it is replaced.
   database, a shared store), not one node's memory. An item another node
   pushed around the moment of subscribing may then arrive both in the seed
   and as a frame: make such items idempotent (a tick, an id).
+- **Room hosts.** Every node knows each app room's host (host mode,
+  `ctx.rooms.setHost`): each change goes to every node, and a node that
+  starts asks the others for the hosts their sockets are, wired with
+  `socket.adapter` or with `setupRedisAdapter`. The Redis adapter counts the
+  nodes it waits for when asked, so the node asks once the adapter's
+  subscribing connection answered a PING sent after its subscriptions; with
+  an adapter that has no such client it asks again `cluster.timeoutMs` after
+  the first answer. A node that dies without closing its sockets leaves the
+  hosts it held recorded on the others until each room's host is set or
+  cleared again.
 - **Collections.** A removal a write cannot address to a scope (a
   `ctx.touch(..., { removed: true })`, junction rows a cascade removed
   without their entry's tracked delete) is broadcast, so every node's

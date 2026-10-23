@@ -11,18 +11,20 @@
 // In the cluster projects the clients sit on node A and `app.server` is
 // node B, whose record of a room's host follows A's changes. Fake nodes
 // (`fakeNode`) hand their server-to-server events to each other in the
-// order a test chooses, for the races a real cluster rarely shows.
+// order a test chooses, for the races a real cluster rarely shows, and show
+// when a node asks the others for the hosts they hold.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostFrame } from "../../protocol/envelope";
 import { createTestApp, emitWithAck, type TestApp } from "../../testing/index";
-import { alice, bob, captureLogger, type AppPrincipal } from "../__tests__/fixtures";
+import { alice, bob, captureLogger, deferred, type AppPrincipal } from "../__tests__/fixtures";
 import type { Hub } from "../emit/hub";
+import { peeredCluster } from "../transports/__tests__/harness";
 import type { QuickdrawServerSocket } from "../transports/types";
 import { compileChannels, compileStreams } from "./define";
 import { frames, refused, settle } from "./__tests__/fixture";
 import { defineGameService, gameContract, qd, WORLD, WORLD_ID } from "./__tests__/hostGame";
-import { createRoomHosts } from "./hosts";
+import { createRoomHosts, seedRoomHosts } from "./hosts";
 import type { HostLeave } from "./types";
 
 const carol: AppPrincipal = { userId: "carol", kind: "user" };
@@ -165,12 +167,20 @@ interface Sent {
   readonly payload: unknown;
 }
 
+/** How a fake node's server runs: its adapter's subscribing client, `cluster.timeoutMs`, and whether its adapter is in memory. */
+interface FakeNodeOptions {
+  readonly subClient?: object;
+  readonly timeoutMs?: number;
+  readonly local?: () => boolean;
+}
+
 /**
  * A node of a fake cluster: what it sends the other nodes waits in `sent`
- * until a test hands it on (`deliver`), its startup ask (`asked`) waits for
- * `started`, and `told` holds the `qd:host` frames its sockets heard.
+ * until a test hands it on (`deliver`), its asks for the other nodes' hosts
+ * (`asked`) wait for `started`, and `told` holds the `qd:host` frames its
+ * sockets heard.
  */
-function fakeNode() {
+function fakeNode(options: FakeNodeOptions = {}) {
   const listeners = new Map<string, (payload: unknown, ...rest: unknown[]) => void>();
   const sockets = new Map<string, QuickdrawServerSocket>();
   const told: unknown[] = [];
@@ -192,18 +202,22 @@ function fakeNode() {
       });
     },
     local: { to: () => ({ emit: (_event: string, frame: unknown) => told.push(frame) }) },
-    sockets: { sockets },
+    sockets:
+      options.subClient === undefined
+        ? { sockets }
+        : { sockets, adapter: { subClient: options.subClient } },
   };
   const hub = {
     io,
-    probe: { local: () => false },
-    cluster: undefined,
+    probe: { local: options.local ?? (() => false) },
+    cluster: options.timeoutMs === undefined ? undefined : { timeoutMs: options.timeoutMs },
     logger: captureLogger(),
     inFlight: new Set(),
   };
   const hosts = createRoomHosts(hub as unknown as Hub, () => true);
   hosts.listen();
   return {
+    io,
     hosts,
     told,
     sent,
@@ -223,7 +237,7 @@ function fakeNode() {
       });
       return answered;
     },
-    /** Ends this node's startup ask with the other nodes' answers. */
+    /** Ends this node's latest ask for the other nodes' hosts with their answers. */
     async started(answers: unknown[]): Promise<void> {
       answer(answers);
       await new Promise((resolve) => {
@@ -360,6 +374,78 @@ describe("a room's host across nodes", () => {
     await c.started(answers);
     expect(hostsOf(a, c)).toEqual([null, null]);
     expect(c.told).toEqual([]);
+  });
+});
+
+describe("a node that starts after a room's host was set", () => {
+  it("learns it from its second ask when nobody answered its first, as the Redis adapter answers when its count misses the node", async () => {
+    const bus = peeredCluster();
+    const boot = async () => {
+      const app = await createTestApp({
+        services: [defineGameService()],
+        peers: true,
+        socket: { adapter: bus.adapter },
+        cluster: { timeoutMs: 200 },
+      });
+      apps.push(app as unknown as TestApp);
+      return app;
+    };
+    const a = await boot();
+    bus.servers.push(a.server.io);
+    const host = await player(a, alice);
+    await host.connection.call.gameService.host(world);
+    // While the late node starts its adapter reaches no other node, so its first ask asks nobody.
+    const others = bus.servers.splice(0);
+    const late = await boot();
+    bus.servers.push(...others, late.server.io);
+    expect(late.server.rooms.hostOf(WORLD)).toBe(null);
+    await vi.waitFor(() => {
+      expect(late.server.rooms.hostOf(WORLD)).toBe(host.id);
+    });
+  });
+
+  it("asks once its adapter's subscribing connection answered a PING, and once only", async () => {
+    const pong = deferred<string>();
+    const node = fakeNode({ subClient: { ping: () => pong.promise }, timeoutMs: 50 });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(node.asked).toEqual([]);
+    pong.resolve("PONG");
+    await vi.waitFor(() => {
+      expect(node.asked).toHaveLength(1);
+    });
+    await node.started([]);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(node.asked).toHaveLength(1);
+  });
+
+  it("asks, and again cluster.timeoutMs after the answer, when the PING goes unanswered or there is no client to PING", async () => {
+    const unanswered = deferred<string>();
+    for (const options of [
+      { subClient: { ping: () => unanswered.promise }, timeoutMs: 50 },
+      { timeoutMs: 50 },
+    ]) {
+      const node = fakeNode(options);
+      await vi.waitFor(() => {
+        expect(node.asked).toHaveLength(1);
+      });
+      await node.started([]);
+      await vi.waitFor(() => {
+        expect(node.asked).toHaveLength(2);
+      });
+    }
+  });
+
+  it("asks once setupRedisAdapter set a cluster adapter on a server that started on its in-memory one", () => {
+    let local = true;
+    const node = fakeNode({ local: () => local });
+    expect(node.asked).toEqual([]);
+    local = false;
+    seedRoomHosts(node.io);
+    expect(node.asked).toHaveLength(1);
   });
 });
 

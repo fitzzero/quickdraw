@@ -104,7 +104,10 @@ All notable changes to this project will be documented in this file.
   (on `defineService` and `createServer`) runs once. The server never
   picks the next host. Behind a cluster adapter each node knows each
   room's host, and every node holds the same one when two nodes set it at
-  once, whatever order the changes reach them in.
+  once, whatever order the changes reach them in. A node that starts
+  after a host was set asks the other nodes for theirs, whether its
+  adapter came as `socket.adapter` or from `setupRedisAdapter`, once the
+  adapter can count it among the nodes it waits for.
 - **The host's client.** `defineHost(contract, { channels, streams })` on
   `./client` takes a handler per host-served channel and an optional seed
   per host-served stream; `serve(connection, { room })` answers the links
