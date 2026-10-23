@@ -66,6 +66,20 @@ All notable changes to this project will be documented in this file.
   otherwise. `docs/protocol-v5.md` describes the frames, the link messages
   and the timings for other clients. Its links take
   `set_lag(ms, jitter, loss)` too, drained each frame.
+- **An app loads the peer-link code only when it needs it.** Every typed
+  client reaches host mode, but not the peer links (WebRTC, the relay,
+  the lag simulator): host mode loads them as a chunk of their own once
+  the server's hello announces peer links (`createServer({ peers: true })`)
+  or at the first link to a room's host, so an open tab holds them before
+  a redeploy removes the chunk. With a bundler that splits dynamic imports
+  by module, an app whose server serves no peer links never downloads
+  them: that keeps about 6 KB gzipped out of a typical app's startup
+  bundle (`createQuickdrawClient`, `createQuickdrawConnection`,
+  `QuickdrawProvider`) with Vite (rollup or rolldown), and 4.5 KB with
+  webpack. esbuild's own code splitting keeps them at startup, since
+  `./client` re-exports `createPeerLink`, and costs about 1.4 KB more. An
+  app that imports `createPeerLink` or `defineHost` loads them at
+  startup.
 
 ### Host mode
 
@@ -147,17 +161,18 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   of a TanStack `QueryClient` it calls (`prefetchQuery`), which any
   `QueryClient` is, so `./utils` names TanStack Query nowhere, in its types
   either. `QueryClientLike` is on `./utils` and both client entries.
-- **The next user never sees the last user's result as a placeholder.**
-  TanStack keeps the query a mounted observer's placeholder is made from
-  outside the cache, which quickdraw empties on another user's hello or
-  when the server ends the session. So the first render after the next
-  user's hello could show the last user's result: an app query's
-  `placeholderData` (such as `keepPreviousData`, which could also keep it
-  shown) and `useSearch`'s last results. This is the follow-up the 5.1
-  security review recorded for CLIENT-1. A query hook now asks a
-  `placeholderData` function, the caller's or its `QueryClient`'s
-  default, only about a query the cache still holds; a placeholder given
-  as a value is shown as before.
+- **A member's `useQuery` and `useSearch` never show the last user's result
+  as a placeholder.** TanStack keeps the query a mounted observer's
+  placeholder is made from outside the cache, which quickdraw empties on
+  another user's hello or when the server ends the session. So the first
+  render after the next user's hello could show the last user's result:
+  the `placeholderData` of a member's `useQuery` (such as
+  `keepPreviousData`, which could also keep it shown) and `useSearch`'s
+  last results. This is the follow-up the 5.1 security review recorded for
+  CLIENT-1. A member's `useQuery` now asks a `placeholderData` function,
+  the caller's or its `QueryClient`'s default, only about a query the cache
+  still holds; a placeholder given as a value is shown as before. An app's
+  own TanStack hook over a member's `key` and `call` is not covered yet.
 - **Behavior change: the admin kit's reads of rows default to
   `staleTime: 0`.** `adminList`, `adminGet` and `adminSubscribers` took the
   provider's five-minute `staleTime`, and their rows are not live, so an
@@ -270,15 +285,19 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   key that is optional), so the check moves out of the handler and into the
   form:
   `custom(async (ctx, input) => input.projectId === undefined || (await ctx.access.can(project, input.projectId, "Read")))`.
-  It counts levels as `{ entry }` does: a service-wide `Admin` reaches every
-  row, and anyone else has no level on a row that is not found. An anonymous
-  caller has none anywhere: an empty map, `false`, `"none"`. Every method
-  call's `ctx` has it, MCP and `ctx.services` calls included, and so does
-  the `ctx` the kits pass to their forms and callbacks; a context no
-  dispatcher built throws `INTERNAL` on its use, and `qd` has none. Reading
-  it in a `share: "all"` handler warns `shared-principal`. An app field
-  named `access` from `initQuickdraw({ context })` is now shadowed by the
-  framework's. `ContextAccess` is on `./server`.
+  A list such a form lets through without its key follows the row policy
+  only when its handler filters it: add `ctx.access.where(service, "Read")`
+  to the query with `AND`, as the README's and the access rule's example
+  does. `ctx.access` counts levels as `{ entry }` does: a service-wide
+  `Admin` reaches every row, and anyone else has no level on a row that is
+  not found. An anonymous caller has none anywhere: an empty map, `false`,
+  `"none"`. Every method call's `ctx` has it, MCP and `ctx.services` calls
+  included, and so does the `ctx` the kits pass to their forms and
+  callbacks; a context no dispatcher built throws `INTERNAL` on its use,
+  and `qd` has none. Reading it in a `share: "all"` handler warns
+  `shared-principal`. An app field named `access` from
+  `initQuickdraw({ context })` is now shadowed by the framework's.
+  `ContextAccess` is on `./server`.
 - **A collection can require a service grant.** `collections: { mine:
 { scopeAccess: "self", requires: { service: "Read" } } }` in
   `defineService` gives a list the grant its methods ask for: besides the
@@ -291,24 +310,48 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   below it, on any node, their sockets leave the scope with `qd:revoked`
   (`reason: "access"`) and get nothing more of it. A reload of a user's
   grants now resets their self lists after re-authorizing them, so a list
-  being revoked gets no `reset` first. Collections without `requires` are
-  unchanged. `CollectionRequires` is on `./server`.
-- **`trackPrisma` returns `Tracked<C>`, a type the untracked client is
-  not.** The tracked client had the client's own type, so nothing told it
-  from the untracked one: a helper that writes could be handed the
-  untracked client, whose writes reach no subscriber, and lint could judge
-  a write only by its receiver's name. `Tracked<C>` is `C` with a mark, a
-  type only, with nothing at run time: still a `C` wherever one is asked
-  for, while the untracked client is no `Tracked<C>`. A helper typed
-  `client: Tracked<PrismaClient>` takes the tracked client and refuses the
-  untracked one at compile time. `TrackedTransaction<PrismaClient>` is the
-  type of `tx` in `db.$transaction(async (tx) => ...)`, a nested one's
-  too, and takes both `tx` and `db`, as does a kit callback's `db` (the
-  admin kit's `prepare`, say) annotated with it. `$transaction`'s array
-  form and options, the model delegates, what `$extends` added, a
-  handler's `db` and `initQuickdraw<{ db: typeof db }>` are unchanged, and
-  so is code that types the client `PrismaClient`. Both types are on
+  being revoked gets no `reset` first. A self list whose methods ask for
+  no grant takes no `requires`, and collections without it are unchanged.
+  `CollectionRequires` is on `./server`.
+- **A self list resumed after a reload of its user's grants reads a
+  page.** The reload raised the resume floor of the user's self lists
+  only to the current revision, and only after it authorized their other
+  scopes again, so a client whose page was at that revision (nothing
+  written since), or that resumed while the reload ran, replayed the
+  buffer and kept the rows the user lost, until each row's next write. The
+  floor now goes one past the current revision, before that
+  authorization; a change to the user's membership of a parent row raises
+  it one past too.
+- **Breaking for types: `trackPrisma` returns `Tracked<C>`, a type the
+  untracked client is not.** The tracked client had the client's own type,
+  so nothing told it from the untracked one: a helper that writes could be
+  handed the untracked client, whose writes reach no subscriber, and lint
+  could judge a write only by its receiver's name. `Tracked<C>` is `C` with
+  a mark, a type only, with nothing at run time: still a `C` wherever one
+  is asked for, while the untracked client is no `Tracked<C>`. A helper
+  typed `client: Tracked<PrismaClient>` takes the tracked client and
+  refuses the untracked one at compile time.
+  `TrackedTransaction<PrismaClient>` is the type of `tx` in
+  `db.$transaction(async (tx) => ...)`, a nested one's too, and takes both
+  `tx` and `db`, as does a kit callback's `db` (the admin kit's `prepare`,
+  say) annotated with it. `$transaction`'s array form and options, the
+  model delegates, what `$extends` added, a handler's `db` and
+  `initQuickdraw<{ db: typeof db }>` are unchanged. Both types are on
   `./prisma` and on the root export, for a shared package without Prisma.
+  On upgrade, a value typed `PrismaClient` no longer goes where
+  `typeof db` (a `Db` alias of it), `Tracked<PrismaClient>` or
+  `ReturnType<typeof trackPrisma>` is asked for. So these stop compiling
+  (TS2345 or TS2322, "Property '[TRACKED]' is missing"): a parameter typed
+  `PrismaClient` handed on to such a parameter, an app's own untracked test
+  client, and a fake (`{} as unknown as PrismaClient`,
+  `mockDeep<PrismaClient>()`). Nothing changes at run time. Type such
+  parameters `Db` (or `Tracked<PrismaClient>`) and fakes as `Db`
+  (`mockDeep<Db>()`, `{} as unknown as Db`). An app's own untracked test
+  client is no `Db`: pass the tracked one, or cast it (`prisma as Db`)
+  where its writes need reach no subscriber. A `db` declared
+  `PrismaClient` (a lazy `Proxy`, say) carries no mark either: declare it
+  `Tracked<PrismaClient>` to pass it to a `Tracked` or
+  `TrackedTransaction` helper.
 - **A job can count a stream's subscribers.**
   `await qd.stream(contract, name).subscribers(scope)` (`subscribers()` for
   a global stream; also on `server.stream` and `dispatcher.stream`)

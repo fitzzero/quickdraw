@@ -49,9 +49,8 @@ export const taskService = qd.defineService(task, {
   collections: {
     // Read on the project opens its scope
     byProject: { anchor: projectContract },
-    // a user opens only the scope that is their id, with the service's Read grant, as its
-    // methods ask for it; its items still follow access above
-    assigned: { scopeAccess: "self", requires: { service: "Read" } },
+    // a user opens only the scope that is their id; its items still follow access above
+    assigned: { scopeAccess: "self" },
   },
   // opens the service topic to Read grants; closed without it
   watchAccess: { service: "Read" },
