@@ -12,17 +12,29 @@
 //   `callTimeoutMs` plus 2 s by default, so a slow call ends with the
 //   server's `TIMEOUT` rather than the client's.
 // - A refused handshake says why in its `connect_error` data: another
-//   protocol (`PROTOCOL_MISMATCH`, which calls `onProtocolMismatch`) or failed
-//   authentication (`UNAUTHENTICATED`). Socket.IO does not retry either.
+//   protocol (`PROTOCOL_MISMATCH`, which calls `onProtocolMismatch`), refused
+//   credentials (`UNAUTHENTICATED`), or credentials the server could not
+//   check (`INTERNAL`: its `authenticate` failed with anything but a
+//   refusal, its session store down, say). Socket.IO retries none of them;
+//   the connection retries the last itself, with backoff (below).
 // - A session the server ends is signed out (the 5.1 audit's CLIENT-1): the
 //   server's disconnect (`io server disconnect`: signed out everywhere,
 //   revoked, expired, or a flooded channel) and a connect or reconnect
 //   refused with `UNAUTHENTICATED` or `FORBIDDEN` (its `authenticate`
-//   failed for any reason, or the handshake was forbidden) forget the hello
-//   and the grants, and such a refusal fails the calls waiting in the send
-//   buffer with `CANCELLED`; the cache session empties every cache, data a
-//   server render prefetched included (`session.ts`). A dropped transport,
-//   a `qd:rotate` or another protocol keeps everything.
+//   refused the credentials, or the handshake was forbidden) forget the
+//   hello and the grants, and such a refusal fails the calls waiting in the
+//   send buffer with `CANCELLED`; the cache session empties every cache,
+//   data a server render prefetched included (`session.ts`). A dropped
+//   transport, a `qd:rotate`, another protocol or an `INTERNAL` refusal
+//   keeps everything.
+// - A connect or reconnect refused with `INTERNAL` stays `connecting` (and
+//   `reconnecting`, after a connect on these credentials) and connects again
+//   after Socket.IO's own reconnection delays (its manager's
+//   `reconnectionDelay`, doubling to `reconnectionDelayMax`, with
+//   `randomizationFactor`'s jitter), as often as its `reconnectionAttempts`
+//   allow: a short outage of the server's session store signs nobody out.
+//   With Socket.IO's reconnection off, or its attempts spent, it is
+//   `refused` with that refusal, and still keeps the user.
 // - `qd:rotate` reconnects at a random moment within its window; `qd:access`
 //   updates the grants in the state.
 // - `RATE_LIMITED` answers start a backoff window per kind (`backoff.ts`).
@@ -54,14 +66,17 @@ import { QuickdrawError } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import {
   isAuthenticationRefused,
+  isAuthenticationUnavailable,
   isProtocolMismatch,
   type AuthenticationRefused,
+  type AuthenticationUnavailable,
   type HelloFrame,
   type ProtocolMismatch,
 } from "../protocol/version";
 import { createBackoff, type Backoff, type BackoffKind, type BackoffWindows } from "./backoff";
 import { createSubscriptionLane, type SubscriptionLane } from "./lane";
 import { reloadOncePerSession } from "./reload";
+import { createRetry, type Retry } from "./retry";
 import { createSocket, type QuickdrawSocket, type SocketClientOptions } from "./socket";
 import { createTopics, notifyEach, type JoinWait, type Topics, type TopicWatch } from "./watch";
 
@@ -114,17 +129,24 @@ export interface QuickdrawConnectionOptions {
  * Where a connection is:
  *
  * - `idle`: not opened, or closed by the app;
- * - `connecting`: opening, or reopening after it was lost (Socket.IO retries);
+ * - `connecting`: opening, or reopening after it was lost (Socket.IO
+ *   retries) or after the server could not authenticate it (`INTERNAL`:
+ *   the connection retries, with backoff);
  * - `connected`;
  * - `disconnected`: the server ended it, and it does not retry;
  * - `refused`: the server refused the handshake (see `refusal`).
  */
 export type ConnectionStatus = "idle" | "connecting" | "connected" | "disconnected" | "refused";
 
-/** Why the server refused a handshake: another protocol, failed authentication, or something else. */
+/**
+ * Why the server refused a handshake: another protocol, refused
+ * credentials, credentials it could not check (`INTERNAL`, only once the
+ * connection stopped retrying), or something else.
+ */
 export type ConnectionRefusal =
   | ProtocolMismatch
   | AuthenticationRefused
+  | AuthenticationUnavailable
   | { readonly code: "REFUSED"; readonly message: string };
 
 /** A snapshot of a connection's state. A new object whenever anything in it changes. */
@@ -132,9 +154,10 @@ export interface ConnectionState {
   readonly status: ConnectionStatus;
   /**
    * True while the connection is `connecting` again after it was connected
-   * with its current credentials: the socket dropped, or the server asked it
-   * to rotate. Queries keep running meanwhile (their calls wait in the send
-   * buffer); `setAuth` and `close` end it.
+   * with its current credentials: the socket dropped, the server asked it to
+   * rotate, or the server could not authenticate a reconnect (`INTERNAL`).
+   * Queries keep running meanwhile (their calls wait in the send buffer);
+   * `setAuth` and `close` end it.
    */
   readonly reconnecting: boolean;
   /**
@@ -352,7 +375,22 @@ export function isServerDisconnect(reason: unknown): boolean {
   return reason === "io server disconnect";
 }
 
-/** True for the `connect_error` data of a handshake refused for its session: `UNAUTHENTICATED` or `FORBIDDEN`. */
+/**
+ * True while `connection`'s socket will connect unless the app closes it:
+ * Socket.IO reconnects it (`socket.active`), or the connection waits to
+ * connect it again because the server could not authenticate it (its
+ * socket inactive, its status `connecting`). Calls made meanwhile wait in
+ * the send buffer, and reads wait for the hello.
+ */
+export function mayConnect(connection: Pick<QuickdrawConnection, "socket" | "getState">): boolean {
+  return connection.socket.active || connection.getState().status === "connecting";
+}
+
+/**
+ * True for the `connect_error` data of a handshake refused for its session:
+ * `UNAUTHENTICATED` or `FORBIDDEN`. `INTERNAL` (the server could not check
+ * the credentials) is not one: the session stands.
+ */
 export function isSessionRefusal(data: unknown): boolean {
   return isRecord(data) && (data.code === "UNAUTHENTICATED" || data.code === "FORBIDDEN");
 }
@@ -363,6 +401,9 @@ function refusalOf(error: Error & { readonly data?: unknown }): ConnectionRefusa
   }
   if (isAuthenticationRefused(error.data)) {
     return { code: "UNAUTHENTICATED" };
+  }
+  if (isAuthenticationUnavailable(error.data)) {
+    return { code: "INTERNAL" };
   }
   return { code: "REFUSED", message: error.message };
 }
@@ -404,13 +445,15 @@ function defaultTimeout(option: number | undefined, hello: HelloFrame | null): n
 /**
  * Whether the socket has connected with the current credentials since the
  * connection last opened (the next connect is then a reconnect), and the
- * topics and the subscription lane, which stop retrying and waiting when the
- * connection closes.
+ * topics, the subscription lane and the retries after a refusal the server
+ * could not authenticate (`retry.ts`), which stop retrying and waiting when
+ * the connection closes.
  */
 interface Session {
   established: boolean;
   readonly topics: Topics;
   readonly lane: SubscriptionLane;
+  readonly retry: Retry;
 }
 
 /** When the socket opens and closes: the app's `open`, `close` and `retain`, new credentials, `qd:rotate`. */
@@ -467,6 +510,7 @@ function createLifecycle(
     session.established = false;
     session.topics.stop();
     session.lane.stop();
+    session.retry.stop();
     clearTimeout(closeTimer);
     closeTimer = undefined;
     clearTimeout(rotateTimer);
@@ -579,6 +623,7 @@ function listenToSocket(wiring: Wiring): void {
   socket.on("connect", () => {
     const again = session.established;
     session.established = true;
+    session.retry.connected();
     store.set({ status: "connected", reconnecting: false, refusal: null });
     session.topics.rejoin();
     if (again) {
@@ -595,6 +640,12 @@ function listenToSocket(wiring: Wiring): void {
   });
   socket.on("connect_error", (error: Error & { readonly data?: unknown }) => {
     if (socket.active) {
+      return;
+    }
+    if (isAuthenticationUnavailable(error.data) && session.retry.later()) {
+      // The server could not check the credentials (its session store is down, say): they may
+      // well be good, so who the connection acts for stands, and it connects again by itself.
+      store.set({ status: "connecting", reconnecting: session.established, refusal: null });
       return;
     }
     const refusal = refusalOf(error);
@@ -677,7 +728,9 @@ export function createQuickdrawConnection(
     backoffRemaining: backoff.remaining,
     reportRateLimited: backoff.report,
   });
-  const session: Session = { established: false, topics, lane: subscriptionLane };
+  // Retries run while the connection is trying to connect: `close` makes it idle.
+  const retry = createRetry(socket, () => store.get().status === "connecting");
+  const session: Session = { established: false, topics, lane: subscriptionLane, retry };
   const lifecycle = createLifecycle(socket, store, backoff, session);
   const reconnected = new Set<() => void>();
   const wiring: Wiring = {
@@ -710,6 +763,7 @@ export function createQuickdrawConnection(
       }
       auth = next;
       session.established = false;
+      retry.stop();
       failBuffered(
         socket,
         new QuickdrawError("CANCELLED", "The credentials changed before the call was sent"),

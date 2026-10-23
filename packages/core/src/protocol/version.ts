@@ -55,18 +55,37 @@ export function isProtocolMismatch(value: unknown): value is ProtocolMismatch {
 }
 
 /**
- * The `data` of the error a server refuses a connection with when
- * authenticating it failed: the app's `authenticate` threw, so the
- * credentials are bad or could not be checked. A client tells it apart from
- * {@link ProtocolMismatch} by `code`; reconnecting needs other credentials.
+ * The `data` of the error a server refuses a connection with when it refused
+ * the credentials: the app's `authenticate` threw a `QuickdrawError` with
+ * code `UNAUTHENTICATED` (or `FORBIDDEN`), or the session it recorded
+ * expired during the handshake. A client tells it apart from
+ * {@link ProtocolMismatch} by `code`; reconnecting needs other credentials,
+ * so the user is signed out. A server that could not check the credentials
+ * refuses with {@link AuthenticationUnavailable} instead.
  */
 export interface AuthenticationRefused {
   readonly code: "UNAUTHENTICATED";
 }
 
-/** True when a `connect_error`'s `data` says authenticating the connection failed. */
+/** True when a `connect_error`'s `data` says the server refused the connection's credentials. */
 export function isAuthenticationRefused(value: unknown): value is AuthenticationRefused {
   return isRecord(value) && value.code === "UNAUTHENTICATED";
+}
+
+/**
+ * The `data` of the error a server refuses a connection with when it could
+ * not authenticate it: the app's `authenticate` (or `loadServiceAccess`)
+ * failed with anything but a refusal, its session store or database down,
+ * say. The credentials may well be good, so a client keeps the user it had
+ * and connects again later, backing off as after a lost connection.
+ */
+export interface AuthenticationUnavailable {
+  readonly code: "INTERNAL";
+}
+
+/** True when a `connect_error`'s `data` says the server could not authenticate the connection. */
+export function isAuthenticationUnavailable(value: unknown): value is AuthenticationUnavailable {
+  return isRecord(value) && value.code === "INTERNAL";
 }
 
 /** The most ids one `qd:sub` may name (RFC 0003 section 6), as `qd:hello` announces it. */

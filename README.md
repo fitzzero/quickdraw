@@ -1403,7 +1403,11 @@ over three transports (design: sections 3, 8 and 10):
 `authenticate` takes one request (`{ transport, auth, headers, socket | req }`,
 plus `credential` and `sessionCookie` on HTTP) for both transports and
 returns a principal, a user id, or nothing for an anonymous caller; throwing
-`QuickdrawError("UNAUTHENTICATED", ...)` refuses. On HTTP the session cookie
+`QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) refuses. Anything
+else it, or `loadServiceAccess`, throws is the server's failure (its session
+store or database down): a socket's handshake is refused `INTERNAL`, and a
+quickdraw client keeps the user and connects again by itself, while an HTTP
+call is answered `UNAUTHENTICATED`, as before. On HTTP the session cookie
 is in `auth.token` only for `socketAuth`'s `authenticate`.
 Pass your own HTTP server as `httpServer` together with the `app` it was
 created from (or with `http: false`).
@@ -1875,12 +1879,18 @@ new credentials until theirs). `isConnected` turns true before the hello and
 false while the connection reconnects; `reconnecting` says the user and the
 page stay meanwhile. When the server ends the session (signed out on
 another device, revoked, expired) or refuses a connect for it (its
-`authenticate` failed, or the handshake was `FORBIDDEN`), the hello is
-forgotten: `isKnown` is false, `status` is `"disconnected"` or
-`"refused"`, and everything quickdraw cached is gone, so a gate that finds
-the connection stopped with nobody known shows the sign-in. Another
-protocol (`refusal.code` `"PROTOCOL_MISMATCH"`) keeps the hello; the
-provider reloads the page once for it:
+`authenticate` refused the credentials, or the handshake was
+`FORBIDDEN`), the hello is forgotten: `isKnown` is false, `status` is
+`"disconnected"` or `"refused"`, and everything quickdraw cached is gone,
+so a gate that finds the connection stopped with nobody known shows the
+sign-in. A server that could not check the credentials (its session store
+down: the handshake is refused `INTERNAL`) signs nobody out: the
+connection keeps the hello and the cache, stays `"connecting"`
+(`reconnecting` after a connect on these credentials) and connects again
+by itself after Socket.IO's reconnection delays, so the gate below shows
+the page with "Reconnecting…", or "Connecting…" before a first connect.
+Another protocol (`refusal.code` `"PROTOCOL_MISMATCH"`) keeps the hello;
+the provider reloads the page once for it:
 
 <!-- example: apps/web/src/components/AuthGate.tsx#gate -->
 

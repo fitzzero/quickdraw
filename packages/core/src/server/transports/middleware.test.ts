@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   defineContract,
   isAuthenticationRefused,
+  isAuthenticationUnavailable,
   isProtocolMismatch,
   PROTOCOL_VERSION,
   query,
@@ -124,49 +125,71 @@ describe("authentication", () => {
     expect(loadServiceAccess.mock.calls).toEqual([["carol"], ["dave"]]);
   });
 
-  it("refuses the connection when authenticate throws or returns no principal", async () => {
+  it("refuses with INTERNAL, logged at error, when authenticating fails without a refusal", async () => {
     const { url, logger } = await serve({
       auth: {
         authenticate: ({ auth }) => {
           if (auth.token === "throw") {
             throw new Error("the session store is down");
           }
+          if (auth.token === "grants") {
+            return { userId: "carol", kind: "user" } as AppPrincipal;
+          }
           return { kind: "user" } as unknown as AppPrincipal;
+        },
+        loadServiceAccess: () => {
+          throw new Error("the database is down");
         },
       },
     });
+    // a store that failed, grants that could not be loaded, and a principal without a userId
     for (const error of [
       await refusal(url, { ...v5Auth(null), token: "throw" }),
+      await refusal(url, { ...v5Auth(null), token: "grants" }),
       await refusal(url, v5Auth(null)),
     ]) {
       expect(error.message).toBe("Authentication failed");
-      expect(error.data).toEqual({ code: "UNAUTHENTICATED" });
-      expect(isAuthenticationRefused(error.data)).toBe(true);
+      expect(error.data).toEqual({ code: "INTERNAL" });
+      expect(isAuthenticationUnavailable(error.data)).toBe(true);
+      expect(isAuthenticationRefused(error.data)).toBe(false);
       expect(isProtocolMismatch(error.data)).toBe(false);
     }
     expect(logger.at("error").map((entry) => entry.message)).toEqual([
       "Socket authentication failed",
       "Socket authentication failed",
+      "Socket authentication failed",
     ]);
   });
 
-  it("logs a refusal authenticate makes on purpose at debug", async () => {
+  it("refuses with UNAUTHENTICATED, logged at debug, what authenticate refuses on purpose", async () => {
     const { url, logger } = await serve({
       auth: {
-        authenticate: () => {
-          throw new QuickdrawError("UNAUTHENTICATED", "The session was revoked");
+        authenticate: ({ auth }) => {
+          throw auth.token === "forbidden"
+            ? new QuickdrawError("FORBIDDEN", "This page may not connect")
+            : new QuickdrawError("UNAUTHENTICATED", "The session was revoked");
         },
       },
     });
-    const error = await refusal(url, { ...v5Auth(null), token: "revoked" });
-    expect(error.message).toBe("Authentication failed");
-    expect(error.data).toEqual({ code: "UNAUTHENTICATED" });
+    for (const token of ["revoked", "forbidden"]) {
+      const error = await refusal(url, { ...v5Auth(null), token });
+      expect(error.message).toBe("Authentication failed");
+      expect(error.data).toEqual({ code: "UNAUTHENTICATED" });
+      expect(isAuthenticationRefused(error.data)).toBe(true);
+      expect(isAuthenticationUnavailable(error.data)).toBe(false);
+    }
     expect(logger.at("error")).toEqual([]);
     expect(logger.at("debug")).toEqual([
       expect.objectContaining({
         message: "Socket authentication failed",
         meta: expect.objectContaining({
           error: expect.objectContaining({ message: "The session was revoked" }),
+        }),
+      }),
+      expect.objectContaining({
+        message: "Socket authentication failed",
+        meta: expect.objectContaining({
+          error: expect.objectContaining({ message: "This page may not connect" }),
         }),
       }),
     ]);

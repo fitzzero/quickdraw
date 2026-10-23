@@ -106,7 +106,10 @@ guide's sections as the report sends you to them.
    "Hand-built auth to the auth routes kit"). Until then the server's
    interim `authenticate` checks the app's session store on every handshake
    and call, and the session cookie's `Origin` (`cookieOriginAllowed`);
-   never `verifyJWT` alone, which a signed-out session still passes.
+   never `verifyJWT` alone, which a signed-out session still passes. It
+   refuses by throwing `QuickdrawError("UNAUTHENTICATED")`, never a plain
+   `Error`, which a socket's handshake answers `INTERNAL` (an outage, which
+   the client retries, keeping the user).
 
 4. **Delete each marker when its item is done**, and run the codemod again:
    it changes no code a second time and rewrites the report from the markers
