@@ -279,6 +279,10 @@ export type StreamPushManyArgs<C extends AnyContract, K extends StreamName<C>> =
     ? [scope: string, items: readonly StreamItemOf<C, K>[]]
     : [items: readonly StreamItemOf<C, K>[]];
 
+/** The arguments of a stream's `subscribers`: `(scope)` for a scoped stream, `()` for a global one. */
+export type StreamSubscribersArgs<C extends AnyContract, K extends StreamName<C>> =
+  IsScopedStream<C, K> extends true ? [scope: string] : [];
+
 /** What `qd.stream(contract, name)` returns. */
 export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
   /**
@@ -295,6 +299,19 @@ export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
    * with nothing kept or sent. The batch form of a `push` in a loop.
    */
   pushMany(...args: StreamPushManyArgs<C, K>): void;
+  /**
+   * How many sockets subscribe to the feed (`subscribers(scope)`, or
+   * `subscribers()` for a global stream), on every node, anonymous ones
+   * included: a job skips the work nobody watches. These are the sockets in
+   * the feed's room, the ones a push reaches: a subscribe counts from when it
+   * joins the feed, once it is authorized. Behind a cluster adapter the
+   * other nodes answer one request with a count each: an answer that does
+   * not arrive within `cluster.timeoutMs` counts as 0, and so does a node
+   * of an earlier version, which does not know the request. A host-served stream (`serve: "host"`) has no feed on
+   * the server, so, as for `push`, its handle refuses this with a
+   * `TypeError`: only the host's client knows who subscribes.
+   */
+  subscribers(...args: StreamSubscribersArgs<C, K>): Promise<number>;
 }
 
 /**

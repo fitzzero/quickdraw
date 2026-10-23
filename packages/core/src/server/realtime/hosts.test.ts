@@ -393,7 +393,7 @@ describe("host-served members on the server", () => {
     ]);
   });
 
-  it("refuse a subscribe to a host-served stream, and a push from the server", async () => {
+  it("refuse a subscribe to a host-served stream, a push from the server, and a count", async () => {
     const { app } = await start();
     const peer = await player(app, alice);
     const frame = { s: "gameService", stream: "world", scope: WORLD_ID };
@@ -403,5 +403,9 @@ describe("host-served members on the server", () => {
     expect(() =>
       app.server.stream(gameContract, "world").push(WORLD_ID, { tick: 1, players: [] }),
     ).toThrow(`stream: gameService.world is served by the room's host (serve: "host")`);
+    // its subscribers are the host's, over peer links the server never reads
+    expect(() => app.server.stream(gameContract, "world").subscribers(WORLD_ID)).toThrow(
+      `stream: gameService.world is served by the room's host (serve: "host")`,
+    );
   });
 });

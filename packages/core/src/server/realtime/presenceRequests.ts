@@ -13,6 +13,16 @@
 // trailing request every caller that arrives meanwhile shares, sent once the
 // one in flight settles, so no caller gets an answer read before it asked.
 //
+// A stream's subscriber count (`StreamHandle.subscribers`) asks the same
+// way with `{ sockets }`, a stream room, answered with how many of that
+// node's sockets are in it: one number per node crosses Valkey, never a
+// socket. An answer that does not arrive within `cluster.timeoutMs` counts as
+// 0 (warned at most once every 10 minutes), and no fallback reads the nodes'
+// sockets: a job that counts to skip work counts again on its next round.
+// A node that knows the event but not `{ sockets }` answers `null`, which
+// counts for nothing; one that does not know the event (below) counts as 0
+// once `cluster.timeoutMs` passed.
+//
 // A node of an earlier version does not know the event and never answers.
 // A request nobody answered within `cluster.timeoutMs` falls back to the old
 // read of every node's sockets for the next 30 s (warned for the first
@@ -21,7 +31,7 @@
 // always counted: a socket a raw `socket.join` put in the room, and on an
 // adapter key another deployment shares, that deployment's sockets.
 
-import { userRoom } from "../../contract/names";
+import { STREAM_ROOM_PREFIX, userRoom } from "../../contract/names";
 import { DEFAULT_CLUSTER_TIMEOUT_MS, within } from "../cluster/acks";
 import { onNodeEvent, tagged } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
@@ -42,6 +52,11 @@ export interface PresenceRequests {
   users(room: string): Promise<string[]>;
   /** True when another node has a socket of `userId`. */
   online(userId: string): Promise<boolean>;
+  /**
+   * How many sockets the other nodes have in stream room `room`; an answer
+   * that does not arrive within `cluster.timeoutMs` counts as 0.
+   */
+  sockets(room: string): Promise<number>;
   /** Answers the other nodes' presence requests, on the server the hub was given. */
   listen(): void;
 }
@@ -100,6 +115,28 @@ function idsOf(answers: unknown): string[] {
   return [...ids];
 }
 
+/**
+ * The sockets the answers to a count add up to. An answer that is not a
+ * count (`null`: another deployment, or a node of an earlier version) counts
+ * for nothing.
+ */
+function countOf(answers: unknown): number {
+  let total = 0;
+  for (const answer of Array.isArray(answers) ? (answers as unknown[]) : []) {
+    if (typeof answer === "number" && Number.isSafeInteger(answer) && answer > 0) {
+      total += answer;
+    }
+  }
+  return total;
+}
+
+/** The answers a timed-out request did get: Socket.IO hands them over on the adapter's own timeout. */
+function answersOf(error: unknown): unknown {
+  return typeof error === "object" && error !== null
+    ? (error as { readonly responses?: unknown }).responses
+    : undefined;
+}
+
 /** The users of the other nodes' sockets in `room`, from every node's sockets (the fallback). */
 async function readUsers(hub: Hub, room: string): Promise<string[]> {
   const { io } = hub;
@@ -138,11 +175,14 @@ function answerRequests(hub: Hub, records: PresenceRecords): void {
     hub.logger,
     PRESENCE_EVENT,
     (payload, answer) => {
-      const { room, userId } = (payload ?? {}) as Readonly<Record<string, unknown>>;
+      const { room, userId, sockets } = (payload ?? {}) as Readonly<Record<string, unknown>>;
       if (typeof room === "string") {
         answer(records.users(room) ?? []);
       } else if (typeof userId === "string") {
         answer((io.sockets.adapter.rooms.get(userRoom(userId))?.size ?? 0) > 0);
+      } else if (typeof sockets === "string" && sockets.startsWith(STREAM_ROOM_PREFIX)) {
+        // Stream rooms only: counts of the framework's other rooms are no node's business.
+        answer(io.sockets.adapter.rooms.get(sockets)?.size ?? 0);
       } else {
         answer(null);
       }
@@ -171,6 +211,39 @@ export function createPresenceRequests(
         "A node did not answer a presence request within cluster.timeoutMs (a node of an earlier quickdraw version during a rolling deploy, a node that stopped answering, or an adapter that does not answer server-side events): presence reads every node's sockets (fetchSockets) for the next 30 s",
         { category: "quickdraw.presence" },
       );
+    }
+  };
+
+  let countWarnedAt: number | undefined;
+  /** Warns that a count's answers did not all arrive in time, at most once every 10 minutes. */
+  const countTimedOut = (): void => {
+    const at = now();
+    if (countWarnedAt === undefined || at - countWarnedAt >= PRESENCE_WARN_EVERY_MS) {
+      countWarnedAt = at;
+      hub.logger.warn(
+        "A node did not answer a stream's subscriber count within cluster.timeoutMs (a node of an earlier quickdraw version during a rolling deploy, a node that stopped answering, or an adapter that does not answer server-side events): the sockets of the nodes whose answers did not arrive counted as 0",
+        { category: "quickdraw.presence" },
+      );
+    }
+  };
+
+  /** Asks the other nodes how many of their sockets are in stream room `room`. */
+  const count = async (room: string): Promise<number> => {
+    const { io } = hub;
+    if (io === undefined) {
+      return 0;
+    }
+    const timeoutMs = hub.cluster?.timeoutMs ?? DEFAULT_CLUSTER_TIMEOUT_MS;
+    try {
+      return countOf(
+        await within(
+          io.serverSideEmitWithAck(PRESENCE_EVENT, tagged(io, { sockets: room })),
+          timeoutMs,
+        ),
+      );
+    } catch (error) {
+      countTimedOut();
+      return countOf(answersOf(error));
     }
   };
 
@@ -208,6 +281,7 @@ export function createPresenceRequests(
           () => readOnline(hub, userId),
         ),
       ),
+    sockets: (room: string) => coalesced(`s\u0000${room}`, () => count(room)),
     listen: () => {
       answerRequests(hub, records);
     },

@@ -37,6 +37,17 @@ export function logLine(taskId: string, line: string): void {
   qd.stream(task, "logs").push(taskId, { line });
 }
 
+// a job skips the work nobody watches: the feed's subscribers on every node
+export async function tailLogs(taskId: string, read: () => Promise<string[]>): Promise<void> {
+  if ((await qd.stream(task, "logs").subscribers(taskId)) > 0) {
+    const lines = await read();
+    qd.stream(task, "logs").pushMany(
+      taskId,
+      lines.map((line) => ({ line })),
+    );
+  }
+}
+
 export async function isOnline(userId: string): Promise<boolean> {
   // also ctx.presence and server.presence
   return await qd.presence.isOnline(userId);

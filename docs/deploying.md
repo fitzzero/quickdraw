@@ -115,7 +115,9 @@ node at once. The counter key `{keyPrefix}:rev` does not change, so
 revisions stay one order across the deploy. A node of the earlier version
 never answers a presence request: while one is up, presence waits
 `cluster.timeoutMs` once and then reads every node's sockets for 30 s at a
-time ("When a node stops answering").
+time ("When a node stops answering"). A node of a version without a
+stream's subscriber count answers that request `null`, or not at all: its
+sockets count as 0 until it is replaced.
 
 ## What holds across nodes
 
@@ -255,7 +257,11 @@ statements and bytes) and the split end-to-end suite:
   of one user, share it: one request in flight, and one more for every read
   that arrives meanwhile. Before 5.1 each read had every node send every
   socket in the room, handshake headers and cookies included (about
-  15.6 KB a socket), to every node (the 5.1 audit's RT-5).
+  15.6 KB a socket), to every node (the 5.1 audit's RT-5);
+- a stream's subscriber count (`qd.stream(...).subscribers(scope)`) is one
+  request on the same event, each node answering with how many of its
+  sockets are in the feed's room: a number per node, never a socket.
+  Concurrent counts of one feed share it, as presence's reads do.
 
 ## When a node stops answering
 
@@ -291,6 +297,16 @@ failure. The fallback counts what earlier versions counted: a socket a raw
 shares, that deployment's sockets. An adapter that does not answer
 server-side events (one built on the in-memory adapter) costs the same
 wait per window.
+
+A stream's subscriber count has no fallback: an answer that does not arrive
+within `cluster.timeoutMs` counts as 0, and the count never throws. It logs
+a warning ("A node did not answer a stream's subscriber count within
+cluster.timeoutMs ...") at most once every 10 minutes. Socket.IO hands the
+other nodes' answers over together, so while one node is silent the others'
+counts are lost too, unless the adapter's own request timeout
+(`requestsTimeout`), which keeps the answers that arrived, comes first. A
+job that skips idle work counts again on its next round, and the sockets of
+a node that stopped answering get nothing on time anyway.
 
 ## When Valkey stops answering
 

@@ -141,7 +141,9 @@ export interface Dispatcher<S extends readonly AnyService[] = readonly AnyServic
   /**
    * The handle of one of the services' streams (RFC 0003 section 12.5), whose
    * `push` appends an item: `dispatcher.stream(task, "logs").push(taskId,
-   * line)`. Throws a `TypeError` for a stream the dispatcher does not serve.
+   * line)`, and whose `subscribers(taskId)` counts the sockets that watch the
+   * feed on every node. Throws a `TypeError` for a stream the dispatcher does
+   * not serve, a host-served one included.
    */
   stream<C extends AnyContract, K extends keyof C["streams"] & string>(
     contract: C,
