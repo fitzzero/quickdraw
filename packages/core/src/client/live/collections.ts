@@ -1,5 +1,5 @@
-// The live collections of one connection and `QueryClient` (RFC 0003
-// sections 7 and 11.5): one controller per scope (`collectionController.ts`),
+// The live collections of one connection and cache (RFC 0003 sections 7
+// and 11.5): one controller per scope (`collectionController.ts`),
 // counted by the hooks that hold it (`registry.ts`), with `qd:c` and
 // `qd:revoked` frames routed to it by `service`, `collection` and `scope`.
 // While any scope is held, the visibility and idle checks run (`resume.ts`),
@@ -8,11 +8,11 @@
 // (`../additions.ts`). After a lost connection, the reconnect's own resume
 // does. A scope whose load was refused is loaded once more when the user's
 // access may have changed: on new service grants (`qd:access`, from
-// `liveData.ts`), and when an `added` delta of another held scope names its
+// `demux.ts`), and when an `added` delta of another held scope names its
 // anchor row (finding F8.4); every connect loads it again too.
 //
-// React-free: the live data (`liveData.ts`) makes one per connection and
-// `QueryClient`.
+// React-free and TanStack-free: the live data has one per connection and
+// cache (`stores.ts`).
 
 import type { CollectionFrame, Revision, RevokeReason } from "../../protocol/envelope";
 import { isName, isRecord } from "../../protocol/guards";
@@ -42,7 +42,7 @@ export interface ScopeHolding {
   release(): void;
 }
 
-/** The live collections of one connection and `QueryClient`. */
+/** The live collections of one connection and cache. */
 export interface CollectionHub {
   /** Holds one scope of a collection for one user of it. */
   subscribe(target: CollectionTarget, scope: string, options?: ScopeOptions): ScopeHolding;

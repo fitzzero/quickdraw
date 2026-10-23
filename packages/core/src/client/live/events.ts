@@ -8,8 +8,8 @@
 // `payload` is read as its first three: a later revision of the protocol
 // may append elements, never insert them (`protocol/envelope.ts`).
 //
-// React-free: the live data (`liveData.ts`) makes one per connection and
-// `QueryClient`.
+// React-free and TanStack-free: the live data has one per connection and
+// cache (`stores.ts`).
 
 import { isName } from "../../protocol/guards";
 import { notifyEach } from "../watch";

@@ -18,6 +18,19 @@ vi.mock("@tanstack/query-core", () => {
 vi.mock("react", () => {
   throw new Error("react was loaded");
 });
+// Loaded by their own names, not through `react`'s: each is refused on its own.
+vi.mock("react/jsx-runtime", () => {
+  throw new Error("react/jsx-runtime was loaded");
+});
+vi.mock("react/jsx-dev-runtime", () => {
+  throw new Error("react/jsx-dev-runtime was loaded");
+});
+vi.mock("react-dom", () => {
+  throw new Error("react-dom was loaded");
+});
+vi.mock("react-dom/client", () => {
+  throw new Error("react-dom/client was loaded");
+});
 
 const SEAM = ["./host.ts", "./stores.ts", "../cacheSession.ts"];
 

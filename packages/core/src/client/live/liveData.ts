@@ -28,12 +28,12 @@ export type { LiveData } from "./stores";
 const lives = new WeakMap<QuickdrawConnection, WeakMap<QueryClient, LiveData>>();
 
 /** What the stores of `connection` and `queryClient` work with: the client's cache and overlays. */
-function hostOf(connection: QuickdrawConnection, queryClient: QueryClient): LiveHost {
+function liveHostOf(connection: QuickdrawConnection, queryClient: QueryClient): LiveHost {
   return { connection, cache: queryCacheOf(queryClient), overlays: storeOf(queryClient) };
 }
 
 function createLiveData(connection: QuickdrawConnection, queryClient: QueryClient): LiveData {
-  const live = createStores(hostOf(connection, queryClient));
+  const live = createStores(liveHostOf(connection, queryClient));
   listenToFrames(connection.socket, live);
   followConnection(connection, () => sessionOf(connection, queryClient), live);
   return live;
@@ -76,7 +76,7 @@ export function inertLiveData(
   queryClient: QueryClient,
   presence: PresenceStore,
 ): LiveData {
-  const live = createStores(hostOf(connection, queryClient), presence);
+  const live = createStores(liveHostOf(connection, queryClient), presence);
   livesOf(connection).set(queryClient, live);
   return live;
 }

@@ -33,8 +33,8 @@
 //   again whenever a way to the room's host opens; a connect does not
 //   subscribe it.
 //
-// React-free: the live data (`liveData.ts`) makes one per connection and
-// `QueryClient`.
+// React-free and TanStack-free: the live data has one per connection and
+// cache (`stores.ts`).
 
 import { CLIENT_EVENTS } from "../../contract/names";
 import { QuickdrawError } from "../../protocol/errors";

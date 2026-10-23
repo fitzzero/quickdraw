@@ -9,7 +9,7 @@
 // - every 5 minutes, plus or minus 20% so clients spread out, the same
 //   check runs: the idle convergence check.
 //
-// A resume after a reconnect is the store's own (`liveData.ts`). Nothing here
+// A resume after a reconnect is the store's own (`stores.ts`). Nothing here
 // needs a DOM: without `document` (React Native, Node) only the timer runs.
 // Conveyor wrote both checks around 4.1's `useCollection` by hand.
 //

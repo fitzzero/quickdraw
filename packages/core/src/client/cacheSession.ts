@@ -67,7 +67,7 @@ export interface CacheSession {
 }
 
 /** What a session does to its cache. */
-export interface SessionCache {
+export interface SessionEffects {
   /** Removes everything cached: a hello named another user, or the server ended the session. */
   empty(): void;
   /** Reads everything cached again: the first hello on new credentials named the same user. */
@@ -99,7 +99,7 @@ export function userOf(hello: unknown): string | null {
 /** Settles the cache `owner` names for the user `hello` names. */
 function settle(
   owner: object,
-  cache: SessionCache,
+  effects: SessionEffects,
   hello: HelloFrame,
   first: boolean,
 ): HelloChange {
@@ -107,12 +107,12 @@ function settle(
   const loaded = loadedFor.get(owner);
   loadedFor.set(owner, { userId: user });
   if (loaded !== undefined && loaded.userId !== user) {
-    cache.empty();
+    effects.empty();
     return { switched: true, first };
   }
   if (loaded !== undefined && first) {
     // The same user on new credentials: what is cached may stay, read again as them.
-    cache.refresh();
+    effects.refresh();
   }
   return { switched: false, first };
 }
@@ -120,12 +120,12 @@ function settle(
 function createSession(
   connection: QuickdrawConnection,
   owner: object,
-  cache: SessionCache,
+  effects: SessionEffects,
 ): CacheSession {
   const listeners = new Set<(change: HelloChange) => void>();
   let held = connection.getState().hello;
   if (held !== null) {
-    settle(owner, cache, held, false);
+    settle(owner, effects, held, false);
   }
   connection.subscribe(() => {
     const next = connection.getState().hello;
@@ -135,7 +135,7 @@ function createSession(
     const first = held === null;
     held = next;
     if (next !== null) {
-      const change = settle(owner, cache, next, first);
+      const change = settle(owner, effects, next, first);
       notifyEach(listeners, (listener) => {
         listener(change);
       });
@@ -143,7 +143,7 @@ function createSession(
   });
   // The server ended the session: nothing cached is anyone's any more.
   const end = (): void => {
-    cache.empty();
+    effects.empty();
     loadedFor.set(owner, { userId: null });
     notifyEach(listeners, (listener) => {
       listener({ switched: true, first: false });
@@ -173,13 +173,14 @@ function createSession(
 /**
  * The session of `connection` and the cache `owner` names, made on first use
  * and kept as long as the connection: from then on, every `qd:hello`
- * settles that cache for the user it names, through `cache`. Only the first
- * call's `cache` is kept: an owner has one cache.
+ * settles that cache for the user it names, through `effects`. The first
+ * call's `effects` are kept, and later calls' are ignored: an owner has one
+ * cache.
  */
 export function cacheSessionOf(
   connection: QuickdrawConnection,
   owner: object,
-  cache: SessionCache,
+  effects: SessionEffects,
 ): CacheSession {
   let byOwner = sessions.get(connection);
   if (byOwner === undefined) {
@@ -188,7 +189,7 @@ export function cacheSessionOf(
   }
   let session = byOwner.get(owner);
   if (session === undefined) {
-    session = createSession(connection, owner, cache);
+    session = createSession(connection, owner, effects);
     byOwner.set(owner, session);
   }
   return session;

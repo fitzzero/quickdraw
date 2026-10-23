@@ -26,6 +26,7 @@ import { overlaysOf } from "./optimistic";
 import { mutateOptimistically } from "./optimisticCall";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
 import { renderWithQuickdraw } from "../testing/client";
+import { cacheSessionOf } from "./cacheSession";
 import { placeholderFromSession } from "./index";
 import { sessionOf } from "./session";
 import { outgoing, until } from "./__tests__/fixtures";
@@ -149,7 +150,8 @@ describe("the session of a connection and a QueryClient", () => {
       id: "t1",
       title: "Pending",
     });
-    const told = vi.fn();
+    // What the overlays' listeners read when told: the queries are removed first.
+    const told = vi.fn((): unknown => queryClient.getQueryData(entityKey("taskService", "t1")));
     overlays.subscribe(told);
 
     fake.setState({ hello: null });
@@ -162,6 +164,7 @@ describe("the session of a connection and a QueryClient", () => {
       title: "T1",
     });
     expect(told).toHaveBeenCalled();
+    expect(told.mock.results.map((result) => result.value)).toEqual([undefined]);
     expect(changes).toEqual([
       { switched: false, first: true },
       { switched: true, first: true },
@@ -211,6 +214,34 @@ describe("the session of a connection and a QueryClient", () => {
     other.setState({ hello: fakeHello("cy") });
     sessionOf(other.connection, queryClient);
     expect(queryClient.getQueryData(entityKey("taskService", "t1"))).toBeUndefined();
+  });
+
+  it("tells its listeners of another user's hello and of a server end once the cache is emptied", () => {
+    const { fake, queryClient, fill } = setup();
+    fake.setState({ hello: fakeHello("ada") });
+    const read: unknown[] = [];
+    sessionOf(fake.connection, queryClient).onHello(() => {
+      read.push(queryClient.getQueryData(entityKey("taskService", "t1")));
+    });
+    fill();
+    fake.setState({ hello: null });
+    fake.setState({ hello: fakeHello("cy") });
+    fill();
+    fake.setState({ hello: null, status: "disconnected" });
+    fake.deliver("disconnect", "io server disconnect");
+    expect(read).toEqual([undefined, undefined]);
+  });
+
+  it("is one session per connection and cache, however often it is asked for", () => {
+    const fake = fakeConnection();
+    const queryClient = new QueryClient();
+    expect(sessionOf(fake.connection, queryClient)).toBe(sessionOf(fake.connection, queryClient));
+    const owner = {};
+    const effects = { empty: vi.fn(), refresh: vi.fn() };
+    const session = cacheSessionOf(fake.connection, owner, effects);
+    expect(cacheSessionOf(fake.connection, owner, effects)).toBe(session);
+    expect(cacheSessionOf(fake.connection, {}, effects)).not.toBe(session);
+    expect(cacheSessionOf(fakeConnection().connection, owner, effects)).not.toBe(session);
   });
 });
 
