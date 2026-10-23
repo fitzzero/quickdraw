@@ -95,7 +95,9 @@ export interface QuickdrawStatus {
    * `"disconnected"`, or `"refused"` after the handshake's error code
    * `UNAUTHENTICATED` or `FORBIDDEN`): the hello, the grants and everything
    * quickdraw cached are gone. Another protocol (`refusal.code`
-   * `"PROTOCOL_MISMATCH"`) keeps them. It stays true while the connection
+   * `"PROTOCOL_MISMATCH"`) keeps them, and so does a server that could not
+   * check the credentials (`INTERNAL`: the connection stays `"connecting"`
+   * and connects again by itself). It stays true while the connection
    * reconnects with the same credentials. Gate on it, not on `isConnected`;
    * while it is false, a stopped `status` tells "signed out" from "not
    * known yet".
@@ -103,8 +105,9 @@ export interface QuickdrawStatus {
   readonly isKnown: boolean;
   /**
    * True while the connection is connecting again after it was connected
-   * with its current credentials (the network dropped, or the server asked
-   * it to rotate). What it showed stays meanwhile, and `userId` is kept.
+   * with its current credentials (the network dropped, the server asked it
+   * to rotate, or the server could not authenticate a reconnect). What it
+   * showed stays meanwhile, and `userId` is kept.
    */
   readonly reconnecting: boolean;
   /** The server's `qd:hello` on the current credentials: its version, limits and who the socket acts for. */

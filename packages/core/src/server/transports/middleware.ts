@@ -11,6 +11,7 @@ import {
   PROTOCOL_VERSION,
   isQdHandshake,
   type AuthenticationRefused,
+  type AuthenticationUnavailable,
   type ProtocolMismatch,
 } from "../../protocol/version";
 import type { LoopWatch } from "../devWarnings";
@@ -21,14 +22,22 @@ import {
   type RateLimiter,
   type RateLimitOptions,
 } from "../rateLimit";
-import { isRefusal, socketSessionExpiryOf, type ResolvePrincipal } from "./auth";
+import {
+  isForbiddenCredential,
+  isRefusal,
+  socketSessionExpiryOf,
+  type ResolvePrincipal,
+} from "./auth";
 import { legacyFailure } from "./legacy";
 import type { QuickdrawIo, QuickdrawServerSocket, SocketContext } from "./types";
 
 type Next = (error?: ExtendedError) => void;
 
 /** A refused handshake: Socket.IO sends `message` and `data` as the client's `connect_error`. */
-function refusal(message: string, data: ProtocolMismatch | AuthenticationRefused): ExtendedError {
+function refusal(
+  message: string,
+  data: ProtocolMismatch | AuthenticationRefused | AuthenticationUnavailable,
+): ExtendedError {
   const error: ExtendedError = new Error(message);
   error.data = data;
   return error;
@@ -40,6 +49,8 @@ const MISMATCH: ProtocolMismatch = Object.freeze({
 });
 
 const UNAUTHENTICATED: AuthenticationRefused = Object.freeze({ code: "UNAUTHENTICATED" });
+
+const UNAVAILABLE: AuthenticationUnavailable = Object.freeze({ code: "INTERNAL" });
 
 /**
  * Reads the handshake's `auth.qd`. Protocol 5 is served. A client without
@@ -104,13 +115,20 @@ function logExpired(
 /**
  * Authenticates the socket and keeps its principal on `socket.data`. A
  * failure refuses the connection with "Authentication failed", as 4.1 did,
- * and `{ code: "UNAUTHENTICATED" }` as the `connect_error` data, so a client
- * can tell it from a protocol mismatch. A refusal `authenticate` makes on
- * purpose, by throwing a `QuickdrawError` with that code (a revoked session,
- * say), is the client's doing and logs at debug; any other failure at error.
- * So is a socket whose recorded session (`recordSocketSession`) expired
- * before the handshake ended: it never connects, rather than connecting and
- * being disconnected at once (the 5.1 audit's AUTH-4).
+ * and a `connect_error` data a client tells apart from a protocol mismatch:
+ *
+ * - `{ code: "UNAUTHENTICATED" }` for a refusal `authenticate` makes on
+ *   purpose, by throwing a `QuickdrawError` with code `UNAUTHENTICATED` (a
+ *   revoked session, say) or `FORBIDDEN`, as the HTTP transport takes them;
+ *   it is the client's doing and logs at debug. So is a socket whose
+ *   recorded session (`recordSocketSession`) expired before the handshake
+ *   ended: it never connects, rather than connecting and being disconnected
+ *   at once (the 5.1 audit's AUTH-4). A client signs the user out.
+ * - `{ code: "INTERNAL" }` for any other failure (`authenticate` or
+ *   `loadServiceAccess` threw something else: the session store or the
+ *   database is down), logged at error: the credentials may well be good,
+ *   so a client keeps the user and connects again later, where 5.1 signed
+ *   every reconnecting user out of a short outage.
  */
 export function authMiddleware(
   resolvePrincipal: ResolvePrincipal,
@@ -135,13 +153,13 @@ export function authMiddleware(
         next();
       },
       (error: unknown) => {
-        const level = isRefusal(error) ? "debug" : "error";
-        context.logger[level]("Socket authentication failed", {
+        const refused = isRefusal(error) || isForbiddenCredential(error);
+        context.logger[refused ? "debug" : "error"]("Socket authentication failed", {
           category: "quickdraw.socket",
           socketId: socket.id,
           error: describeError(error),
         });
-        next(refusal("Authentication failed", UNAUTHENTICATED));
+        next(refusal("Authentication failed", refused ? UNAUTHENTICATED : UNAVAILABLE));
       },
     );
   };

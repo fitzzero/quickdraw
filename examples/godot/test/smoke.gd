@@ -77,6 +77,7 @@ func _run() -> void:
 	client.close()
 	await _unclaimed(client)
 	await _refused(url, client.trace)
+	await _unavailable(url, client.trace)
 	print("RESULT ", JSON.stringify({"checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -298,3 +299,19 @@ func _refused(url: String, trace: bool) -> void:
 	check(refusal[0] == "UNAUTHENTICATED", "a token the server refuses: UNAUTHENTICATED")
 	await wait_ms(1500)
 	check(not other.is_ready(), "and the client does not reconnect")
+
+
+## The game server cannot authenticate the flaky token's first handshake (an
+## outage of its session store, refused INTERNAL): that is no refusal, so the
+## client connects again by itself, after its backoff, and signs in.
+func _unavailable(url: String, trace: bool) -> void:
+	var flaky = load("res://addons/quickdraw/quickdraw_client.gd").new()
+	flaky.trace = trace
+	root.add_child(flaky)
+	var refusals: Array = []
+	flaky.refused.connect(func(code, _message): refusals.append(code))
+	flaky.connect_to(url, {"token": "flaky"})
+	var signed_in: bool = await until(func() -> bool: return flaky.is_ready(), 5000)
+	check(signed_in and flaky.user_id == "flaky", "a handshake refused INTERNAL: the client connects again and signs in")
+	check(refusals.is_empty(), "and it is not told it was refused")
+	flaky.close()

@@ -27,7 +27,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { MethodOutput } from "../contract/methods";
 import { QuickdrawError } from "../protocol/errors";
 import { call, isNotModified, type CallRequest } from "./call";
-import type { QuickdrawConnection } from "./connection";
+import { mayConnect, type QuickdrawConnection } from "./connection";
 import type { MethodQueryKey } from "./keys";
 import { overlaysOf } from "./optimistic";
 import { rowShapeOf } from "./overlayRows";
@@ -80,17 +80,17 @@ async function fetchVersioned<Output>(
 
 /**
  * Resolves once the connection holds the server's hello on its current
- * credentials, once its socket stops trying to connect (the call then fails
- * as it would), or as soon as `signal` aborts. Resolving takes a microtask,
- * so whatever the hello does to the cache (`session.ts`) is done before the
- * read looks at the cache.
+ * credentials, once it stops trying to connect (`mayConnect`: the call then
+ * fails as it would), or as soon as `signal` aborts. Resolving takes a
+ * microtask, so whatever the hello does to the cache (`session.ts`) is done
+ * before the read looks at the cache.
  */
 async function helloKnown(
   connection: QuickdrawConnection,
   signal: AbortSignal | undefined,
 ): Promise<void> {
   const ready = (): boolean =>
-    connection.getState().hello !== null || !connection.socket.active || signal?.aborted === true;
+    connection.getState().hello !== null || !mayConnect(connection) || signal?.aborted === true;
   if (ready()) {
     return;
   }

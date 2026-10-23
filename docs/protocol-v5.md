@@ -72,10 +72,11 @@ then lists as `"binary"`.
 
 The client sends `HandshakeAuth` as the CONNECT packet's `auth`. The
 server answers with `qd:hello` (`HelloFrame`), or refuses the connection
-with CONNECT_ERROR, whose `data` is `ProtocolMismatch` or
-`AuthenticationRefused`. How `token` is checked is the app's: the server's
-`authenticate` reads the whole `auth` object, and a browser's cookies reach
-it too.
+with CONNECT_ERROR, whose `data` is `ProtocolMismatch`,
+`AuthenticationRefused` (the credentials were refused) or
+`AuthenticationUnavailable` (the server could not check them). How `token`
+is checked is the app's: the server's `authenticate` reads the whole `auth`
+object, and a browser's cookies reach it too.
 
 A 5.0 server speaks protocol `5` and refuses a client that names any other.
 
@@ -109,14 +110,29 @@ speaks another protocol, or none. It is not an `ErrorCode`: no call failed.
 
 ### `AuthenticationRefused`
 
-The `data` of the error a server refuses a connection with when
-authenticating it failed: the app's `authenticate` threw, so the
-credentials are bad or could not be checked. A client tells it apart from
-`ProtocolMismatch` by `code`; reconnecting needs other credentials.
+The `data` of the error a server refuses a connection with when it refused
+the credentials: the app's `authenticate` threw a `QuickdrawError` with
+code `UNAUTHENTICATED` (or `FORBIDDEN`), or the session it recorded
+expired during the handshake. A client tells it apart from
+`ProtocolMismatch` by `code`; reconnecting needs other credentials,
+so the user is signed out. A server that could not check the credentials
+refuses with `AuthenticationUnavailable` instead.
 
 | Field  | Type                |
 | ------ | ------------------- |
 | `code` | `"UNAUTHENTICATED"` |
+
+### `AuthenticationUnavailable`
+
+The `data` of the error a server refuses a connection with when it could
+not authenticate it: the app's `authenticate` (or `loadServiceAccess`)
+failed with anything but a refusal, its session store or database down,
+say. The credentials may well be good, so a client keeps the user it had
+and connects again later, backing off as after a lost connection.
+
+| Field  | Type         |
+| ------ | ------------ |
+| `code` | `"INTERNAL"` |
 
 ### `HelloSubscriptionLimits`
 
@@ -280,9 +296,14 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   connected until then: calls are still answered on that socket. At that
   moment, disconnect and reconnect with a fresh handshake, so the server's
   clients come back spread over the window.
-- When the handshake is refused, reconnecting with the same client and
-  credentials is refused again: `PROTOCOL_MISMATCH` needs a client that
-  speaks the server's protocol, `UNAUTHENTICATED` other credentials.
+- When the handshake is refused with `PROTOCOL_MISMATCH` or
+  `UNAUTHENTICATED`, reconnecting with the same client and credentials is
+  refused again: `PROTOCOL_MISMATCH` needs a client that speaks the
+  server's protocol, `UNAUTHENTICATED` other credentials (sign the user
+  out). `INTERNAL` says the server could not check the credentials (its
+  session store was down, say): keep the user and connect again later,
+  backing off as after a lost connection (a second or so at first, doubling
+  to some seconds, with jitter), so a short outage signs nobody out.
 - Ignore what you do not know, in every frame: an object field you do not
   read, and an array element after the last one you read (`qd:event`,
   `qd:stream`). Protocol 5 grows only that way: a later revision may add
