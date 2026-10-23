@@ -1836,7 +1836,10 @@ export function TaskDetail({ id }: { readonly id: string }) {
   quickdraw cached, and no `useQuery` of the client shows a placeholder made
   from it (`placeholderData` such as `keepPreviousData`), nor `useSearch` its
   last results; new credentials for the same user refetch it; new grants
-  (`qd:access`) refetch every query.
+  (`qd:access`) refetch every query. Live entries never take a placeholder,
+  whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
+  `useCollection` and a search's held scope show nothing of another row,
+  scope or user while a new id, scope or user loads.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
@@ -3078,7 +3081,9 @@ ping: { access: "authenticated", handler } }`, which delivers as before
 input, { enabled?, onJoined? })` (from `./client`) runs the joining call
   (`enterBoard` above) on every `qd:hello` and when its input changes by
   value, never on a re-render, and shows `status` (`idle` with no socket to
-  join with, `joining`, `joined`, `error`), `isJoined`, `data` and `error`;
+  join with, `joining`, `joined`, `error`), `isJoined`, `data` (what the
+  last join returned, to the user it ran as only: hidden while new
+  credentials await their hello, and never the next user's) and `error`;
   a refusal stands until the next hello or `retry()` (which runs the call
   again at once on the current socket, and does nothing while there is
   none or `enabled` is false), `RATE_LIMITED` is tried again after its

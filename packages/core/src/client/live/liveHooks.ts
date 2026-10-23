@@ -41,13 +41,17 @@ export function useLiveData(hook: string): {
   return { connection, queryClient, live: liveDataOf(connection, queryClient), awaiting };
 }
 
-/** What a hook observes its entry with: a query that is never fetched, never stale, never shared structurally. */
+/**
+ * What a hook observes its entry with: a query that is never fetched, never
+ * stale, never shared structurally, and never shown with a placeholder.
+ */
 export interface EntryQueryOptions<T> {
   readonly queryKey: QueryKey;
   readonly queryFn: () => T | null;
   readonly enabled: false;
   readonly staleTime: number;
   readonly structuralSharing: false;
+  readonly placeholderData: undefined;
 }
 
 /** The options of the query a hook observes the entry under `queryKey` with. */
@@ -59,6 +63,10 @@ export function entryQuery<T>(queryKey: QueryKey): EntryQueryOptions<T> {
     enabled: false,
     staleTime: Number.POSITIVE_INFINITY,
     structuralSharing: false,
+    // Given, so no `placeholderData` default of the `QueryClient` applies (`keepPreviousData`,
+    // say): TanStack would take the placeholder from the last entry this hook's observer showed,
+    // another row's, another scope's or another user's, until the stores write this one.
+    placeholderData: undefined,
   };
 }
 

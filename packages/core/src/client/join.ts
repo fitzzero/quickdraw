@@ -17,7 +17,11 @@
 // - `status` is the current socket's: `"idle"` while there is none to join
 //   with (before the first hello, while reconnecting) or `enabled` is false,
 //   `"joining"` while the call runs, then `"joined"` or `"error"`. `data` is
-//   what the last successful call returned, kept through a reconnect.
+//   what the last successful call returned, kept through a reconnect: it
+//   belongs to the user whose hello the join ran under (`userOf`, anonymous
+//   included), and shows only while the connection's hello names that user.
+//   New credentials hide it until their hello, and the next user's joins
+//   start from nothing.
 // - `retry()` runs the call again at once on the current socket, for a
 //   join that was refused (finding F6.3 of the quickdraw-chat migration: a
 //   refused first join could be retried only by toggling `enabled`). It
@@ -45,6 +49,7 @@ import {
 } from "react";
 import { QuickdrawError } from "../protocol/errors";
 import { DEFAULT_BACKOFF_MS, retryAfterOf } from "./backoff";
+import { userOf } from "./cacheSession";
 import type { QuickdrawConnection } from "./connection";
 import { useConnectionState, useQuickdrawContext } from "./context";
 
@@ -81,7 +86,12 @@ export interface UseJoinResult<Output> {
   readonly status: JoinStatus;
   /** `status === "joined"`. */
   readonly isJoined: boolean;
-  /** What the last successful call returned, on this socket or an earlier one. */
+  /**
+   * What the last successful call returned, on this socket or an earlier
+   * one, for the user the connection acts for: shown only while its hello
+   * names the user the call ran as, so never to another user, nor while new
+   * credentials await their hello.
+   */
   readonly data: Output | undefined;
   /** Why the call failed on the current socket; `null` otherwise. */
   readonly error: QuickdrawError | null;
@@ -94,9 +104,11 @@ export interface UseJoinResult<Output> {
   readonly retry: () => void;
 }
 
-/** The last join: the socket it ran on, and how it went. */
+/** The last join: the socket and the user it ran as, and how it went. */
 interface JoinState<Output> {
   readonly socketId: string | undefined;
+  /** The user the hello it ran under names (`null`: anonymous), whose `data` it holds. */
+  readonly userId: string | null;
   readonly status: Exclude<JoinStatus, "idle">;
   readonly data: Output | undefined;
   readonly error: QuickdrawError | null;
@@ -136,13 +148,23 @@ function startJoins<Input, Output>(
     // New credentials clear the hello at once, before the old socket closes: a reply that
     // arrives then is the last user's join, never this hook's data or onJoined.
     const { hello } = connection.getState();
+    const userId = userOf(hello);
     const current = (): boolean =>
       !stopped && mine === attempt && connection.getState().hello === hello;
-    setState((previous) => ({ socketId, status: "joining", data: previous?.data, error: null }));
+    // What the last join returned stays only for the same user: never another's.
+    const kept = (previous: JoinState<Output> | undefined): Output | undefined =>
+      previous?.userId === userId ? previous.data : undefined;
+    setState((previous) => ({
+      socketId,
+      userId,
+      status: "joining",
+      data: kept(previous),
+      error: null,
+    }));
     member.call(latest.current.input).then(
       (data) => {
         if (current()) {
-          setState({ socketId, status: "joined", data, error: null });
+          setState({ socketId, userId, status: "joined", data, error: null });
           latest.current.onJoined?.(data);
         }
       },
@@ -153,8 +175,9 @@ function startJoins<Input, Output>(
         const failure = failureOf(error);
         setState((previous) => ({
           socketId,
+          userId,
           status: "error",
-          data: previous?.data,
+          data: kept(previous),
           error: failure,
         }));
         if (failure.code === "RATE_LIMITED") {
@@ -199,7 +222,8 @@ export function useJoin<Input, Output>(
   options: UseJoinOptions<Output> = {},
 ): UseJoinResult<Output> {
   const { connection } = useQuickdrawContext("useJoin");
-  const connected = useConnectionState(connection).status === "connected";
+  const connectionState = useConnectionState(connection);
+  const connected = connectionState.status === "connected";
   const enabled = options.enabled !== false;
   const key = hashKey([input]);
   const latest = useRef<Latest<Input, Output>>({ input, onJoined: options.onJoined });
@@ -234,7 +258,11 @@ export function useJoin<Input, Output>(
       : undefined;
   const status = shown?.status ?? "idle";
   const error = shown?.error ?? null;
-  const data = state?.data;
+  // Only to the user it ran as, while a hello names them: never while new credentials await theirs.
+  const data =
+    connectionState.hello !== null && userOf(connectionState.hello) === state?.userId
+      ? state.data
+      : undefined;
   return useMemo(
     () => ({ status, isJoined: status === "joined", data, error, retry }),
     [status, data, error, retry],
