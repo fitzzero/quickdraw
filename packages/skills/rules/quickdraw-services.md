@@ -184,6 +184,13 @@ allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
   `no-plain-error-refusal` reports one thrown in an `authenticate` (or
   `socketAuth`'s `loadPrincipal`, which refuses by returning `null`)
   written where the server is made.
+- The MCP registry's `principal` hook refuses a token the same way: a
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`) fails the call
+  `UNAUTHENTICATED` (401 over HTTP), and anything else it throws is an
+  outage, answered `INTERNAL` (500), never a refused token. `bearerAuth`
+  refuses that way. Never throw a plain `Error` there for a bad token: the
+  agent would get `INTERNAL`, and neither the development warning nor the
+  lint rule looks at this hook.
 
 ## Writes are tracked; frames are derived
 

@@ -1589,9 +1589,15 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   `"public"` tool takes none. Custom tools served beside the services of
   apps that admit no kind in common stop the registry at startup.
 - To refuse a token, the `principal` hook throws
-  `QuickdrawError("UNAUTHENTICATED")`, which is logged at debug, as the
-  caller's doing; anything else it throws is logged as an error. Never put
-  the token in the message.
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`): the call is
+  answered `UNAUTHENTICATED` (401 over HTTP), logged at debug, as the
+  caller's doing. Never put the token in the message. Anything else it
+  throws, or a principal of the wrong shape, is the server's failure (its
+  token store or database down), as it is from `authenticate`: the call is
+  answered `INTERNAL` (500 over HTTP) and logged as an error, so an agent
+  is never told that a token the hook could not check is refused. A hook
+  that refuses with a plain `Error` therefore never tells the agent its
+  token is bad; `bearerAuth` refuses with a `QuickdrawError`.
 
 `bind` fills chosen arguments from who is calling instead of from the agent,
 so an agent bound to one project cannot name another in its calls. Here an

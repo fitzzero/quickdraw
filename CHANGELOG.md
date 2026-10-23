@@ -456,6 +456,22 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   anonymous caller. It comes before any call, so a strict test app logs it
   rather than throwing it. A `QuickdrawError` of any code is never warned
   about; `socketAuth` refuses with one.
+- **Behavior change: an MCP call whose `principal` hook cannot run is
+  answered `INTERNAL`, not `UNAUTHENTICATED`.** The MCP registry answered
+  every failure of its `principal` hook with `UNAUTHENTICATED`, an outage
+  of the token or session store included, so an agent whose good token
+  could not be checked during a database blip was told it was refused, and
+  could drop or rotate it. The hook now follows the rule `authenticate`
+  follows on sockets and HTTP (above): a `QuickdrawError`
+  `UNAUTHENTICATED` or `FORBIDDEN` it throws is answered
+  `UNAUTHENTICATED`, 401 from `POST /mcp/invoke`, as before (logged at
+  debug), and anything else, a principal of the wrong shape included,
+  `{ code: "INTERNAL", message: "Internal error" }`: 500 from
+  `POST /mcp/invoke`, and over stdio a tool error carrying that code
+  (logged at error, as before, once). A hook that throws a plain `Error`
+  to refuse a token should throw `QuickdrawError("UNAUTHENTICATED")`
+  instead, as `bearerAuth` does, or the agent is told the server failed
+  rather than that its token is bad.
 - **A nested transaction that rolls back sends none of its writes.**
   Prisma 7 runs `tx.$transaction(async (inner) => ...)` inside an
   interactive transaction as a savepoint of it, but `trackPrisma` opened no

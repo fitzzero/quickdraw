@@ -12,16 +12,17 @@
 //
 // What changed from 4.1: the registry's `principal` hook decides who a bearer
 // token stands for, and a request without one is anonymous (only `"public"`
-// methods and custom tools pass) where 4.1 refused it; a failure answers
-// with its error code's HTTP status and `{ success: false, error, code,
-// data? }` where 4.1 answered 500 and `{ error }`; `invoke` needs
-// `Content-Type: application/json`, as every HTTP transport call does; and a
-// client that goes away cancels its call. Each request is a session of its
-// own, and its queries share the lane of its caller: its bearer token, its
-// user without a token, or its address when anonymous (`lanes.ts`). A
-// request from a web page is refused unless `allowedOrigins` lists its
-// origin, and with `allowedHosts` a request for another `Host`
-// (`httpRequest.ts`).
+// methods and custom tools pass) where 4.1 refused it; a token the hook
+// refuses is answered 401, and a hook that fails otherwise (its token store
+// down) 500 (`session.ts`); a failure answers with its error code's HTTP
+// status and `{ success: false, error, code, data? }` where 4.1 answered 500
+// and `{ error }`; `invoke` needs `Content-Type: application/json`, as every
+// HTTP transport call does; and a client that goes away cancels its call.
+// Each request is a session of its own, and its queries share the lane of
+// its caller: its bearer token, its user without a token, or its address
+// when anonymous (`lanes.ts`). A request from a web page is refused unless
+// `allowedOrigins` lists its origin, and with `allowedHosts` a request for
+// another `Host` (`httpRequest.ts`).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consoleLogger, type Logger } from "../../contract/logger";

@@ -7,10 +7,14 @@
 // queries do. A stdio session is one lane; an HTTP request's lane is its
 // caller's (`lanes.ts`; the 5.1 audit's MCP-4): its bearer token's, its
 // user's without a token, or its address's when anonymous. A hook's refusal
-// (`QuickdrawError` `UNAUTHENTICATED` or `FORBIDDEN`) is logged at debug.
+// (`QuickdrawError` `UNAUTHENTICATED` or `FORBIDDEN`) is logged at debug and
+// fails the call `UNAUTHENTICATED`; anything else it throws is the app's
+// failure (its token store down, say), logged at error and failing the call
+// `INTERNAL`, as the socket and HTTP transports answer an `authenticate`
+// that throws it.
 
 import type { Logger } from "../../contract/logger";
-import { QuickdrawError } from "../../protocol/errors";
+import { INTERNAL_MESSAGE, QuickdrawError } from "../../protocol/errors";
 import { callerGrantsOf, lazyMembers, withCallerGrants, type CallOptions } from "../caller";
 import { toQuickdrawError } from "../pipeline/errors";
 import { describeError } from "../pipeline/metrics";
@@ -43,24 +47,36 @@ export interface SessionSettings {
 
 const CATEGORY = "quickdraw.mcp";
 
+/**
+ * The principal the registry's `principal` hook maps `request` to or, when
+ * the hook throws, the error the call fails with, logged here: a refusal the
+ * hook made on purpose is the caller's doing, logged at debug and answered
+ * `UNAUTHENTICATED`; anything else (its token store down, a principal of the
+ * wrong shape) is the app's failure, logged at error and answered
+ * `INTERNAL`, as the socket and HTTP transports answer an `authenticate`
+ * that throws it.
+ */
 async function principalOf(
   settings: SessionSettings,
   request: McpRequest,
-): Promise<Principal | null> {
+): Promise<Principal | null | QuickdrawError> {
   if (settings.principal === undefined) {
     return null;
   }
   try {
     return toPrincipal(await settings.principal(request));
   } catch (error) {
-    // A refusal the hook made on purpose is the caller's doing; a hook that broke is the app's.
     const refused = isRefusal(error) || isForbiddenCredential(error);
     settings.logger[refused ? "debug" : "error"]("MCP authentication failed", {
       category: CATEGORY,
       transport: request.transport,
       error: describeError(error),
     });
-    throw new QuickdrawError("UNAUTHENTICATED", "Authentication failed");
+    // The token may well be good when the hook could not check it, so the caller is not told it
+    // is not: an agent would drop or rotate a good token for a database blip.
+    return refused
+      ? new QuickdrawError("UNAUTHENTICATED", "Authentication failed")
+      : new QuickdrawError("INTERNAL", INTERNAL_MESSAGE);
   }
 }
 
@@ -104,18 +120,23 @@ function givenPrincipal(principal: unknown): Principal | null {
  * key in `options` (`null` included), that principal, with the grants the
  * dispatcher's in-process callers load when it carries none (as
  * `qd.caller`'s, at each call; a failed load rejects with `INTERNAL`), and
- * the registry's `principal` hook is not asked; else the hook's, rejecting
- * with `UNAUTHENTICATED` when the hook fails. A failing `context` hook
- * rejects with its own error.
+ * the registry's `principal` hook is not asked; else the hook's. When the
+ * hook throws, resolves with the error the call fails with, already logged:
+ * `UNAUTHENTICATED` for a refusal, `INTERNAL` for anything else, and the
+ * `context` hook is not asked. A failing `context` hook rejects with its own
+ * error.
  */
 export async function openSession(
   settings: SessionSettings,
   options: Pick<McpCallOptions, "request" | "principal">,
-): Promise<McpSession> {
+): Promise<McpSession | QuickdrawError> {
   const { request } = options;
   const principal = Object.hasOwn(options, "principal")
     ? await withCallerGrants(givenPrincipal(options.principal), callerGrantsOf(settings.dispatcher))
     : await principalOf(settings, request);
+  if (principal instanceof QuickdrawError) {
+    return principal;
+  }
   const mcp = await contextOf(settings, request, principal);
   return { principal, mcp, connectionId: laneOf(request, principal) };
 }

@@ -61,16 +61,19 @@ export interface McpRegistryOptions<
    * a bare `{ userId }` is a principal of the app's type, or nothing for an
    * anonymous caller, who may call `"public"` methods and `"public"` custom
    * tools only. A stdio server usually reads a token from its environment;
-   * an HTTP request carries one as a bearer token. Throwing fails the call
-   * with `UNAUTHENTICATED`: throw `QuickdrawError("UNAUTHENTICATED")` (or
-   * `FORBIDDEN`) to refuse a token, which is logged at debug, and never put
-   * the token in a message; anything else thrown is logged as an error.
-   * Without it every call is anonymous. An HTTP request's queries share the
-   * lane of its bearer token: a hook that authenticates by anything else (a
-   * cookie, an API key header) must refuse a request whose bearer token it
-   * does not verify, or a caller makes a lane per made-up token. A call
-   * whose options give `principal` (an app that signed the caller in
-   * itself) is not asked about.
+   * an HTTP request carries one as a bearer token. Throw
+   * `QuickdrawError("UNAUTHENTICATED")` (or `FORBIDDEN`) to refuse a token:
+   * the call fails with `UNAUTHENTICATED` (401 over HTTP), logged at debug;
+   * never put the token in the message. Anything else thrown is the app's
+   * failure (its token store down, say), as it is from `authenticate` on a
+   * socket or over HTTP: the call fails with `INTERNAL` (500 over HTTP),
+   * logged as an error, so an agent is never told that a token the hook
+   * could not check is refused. Without it every call is anonymous. An HTTP
+   * request's queries share the lane of its bearer token: a hook that
+   * authenticates by anything else (a cookie, an API key header) must refuse
+   * a request whose bearer token it does not verify, or a caller makes a
+   * lane per made-up token. A call whose options give `principal` (an app
+   * that signed the caller in itself) is not asked about.
    */
   readonly principal?: (
     request: McpRequest,
@@ -281,11 +284,15 @@ async function inSession(
   options: McpCallOptions,
   run: (session: McpSession) => Promise<McpCallResult>,
 ): Promise<McpCallResult> {
-  let session: McpSession;
+  let session: McpSession | QuickdrawError;
   try {
     session = await openSession(settings, options);
   } catch (error) {
     return settle(settings, options, failure(settings, error, name));
+  }
+  if (session instanceof QuickdrawError) {
+    // The `principal` hook failed, and `openSession` logged why: answered as it is, logged once.
+    return settle(settings, options, { ok: false, error: session });
   }
   return run(session);
 }
