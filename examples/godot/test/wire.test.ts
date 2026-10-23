@@ -365,6 +365,25 @@ describe("the GDScript client's session, frame by frame", () => {
       '44{"message":"Authentication failed","data":{"code":"UNAUTHENTICATED"}}',
     );
   });
+
+  it("refuses a handshake it could not authenticate with INTERNAL, then signs the next one in", async () => {
+    const server = await start();
+    const first = await Wire.open(server);
+    await first.next((frame) => frame.startsWith("0"));
+    first.send(SESSION[22] ?? "");
+    expect(await first.next((frame) => frame.startsWith("44"))).toBe(
+      '44{"message":"Authentication failed","data":{"code":"INTERNAL"}}',
+    );
+    // The client connects again on a new WebSocket, after its backoff, with the same token.
+    const again = await Wire.open(server);
+    await again.next((frame) => frame.startsWith("0"));
+    again.send(SESSION[23] ?? "");
+    expect(await again.next((frame) => frame.startsWith("40"))).toMatch(/^40\{"sid":"[\w-]+"\}$/);
+    expect(payloadOf(await again.next(isEvent("qd:hello")))).toMatchObject({ userId: "flaky" });
+    again.send(SESSION[24] ?? "");
+    again.close();
+    await expect.poll(() => server.server.io.sockets.sockets.size).toBe(0);
+  });
 });
 
 describe("the wire beyond the session", () => {

@@ -121,6 +121,7 @@ const expectations = {
       "isQdHandshake",
       "isProtocolMismatch",
       "isAuthenticationRefused",
+      "isAuthenticationUnavailable",
       "isCallEnvelope",
       "isCancel",
       "crud",
@@ -550,6 +551,7 @@ const rootTypes = [
   "HandshakeAuth",
   "ProtocolMismatch",
   "AuthenticationRefused",
+  "AuthenticationUnavailable",
   "HelloLimits",
   "HelloFrame",
   // protocol/envelope.ts

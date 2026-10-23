@@ -1,8 +1,9 @@
 // The client connection against real servers (RFC 0003 sections 8.1 and
-// 11.1): the v5 handshake, refusals for another protocol and for failed
-// authentication, a session the server ends (the 5.1 audit's CLIENT-1), new
-// credentials, `qd:access`, `qd:rotate`, retaining across a strict-mode
-// remount, and backoff windows.
+// 11.1): the v5 handshake, refusals for another protocol and for refused
+// credentials, a session the server ends (the 5.1 audit's CLIENT-1), a
+// server that cannot authenticate (`INTERNAL`: the connection keeps the user
+// and connects again by itself), new credentials, `qd:access`, `qd:rotate`,
+// retaining across a strict-mode remount, and backoff windows.
 
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -11,7 +12,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuickdrawError, QUICKDRAW_VERSION, type ProtocolMismatch } from "../index";
 import { captureLogger, tick } from "../server/__tests__/fixtures";
 import { callData } from "./call";
-import { createQuickdrawConnection, isServerDisconnect, isSessionRefusal } from "./connection";
+import {
+  createQuickdrawConnection,
+  isServerDisconnect,
+  isSessionRefusal,
+  type ConnectionState,
+  type QuickdrawConnection,
+} from "./connection";
 import { reloadOncePerSession, RELOAD_KEY_PREFIX } from "./reload";
 import { alice, bob, clientHarness, testAuth, until, whenStatus } from "./__tests__/fixtures";
 
@@ -49,6 +56,54 @@ async function protocolSixServer(): Promise<{ readonly url: string; close(): Pro
       }),
   };
 }
+
+/**
+ * A server whose `authenticate` fails as an outage of its session store
+ * would (a plain `Error`, refused `INTERNAL`) for the next `fail(times)`
+ * handshakes, and counts the handshakes it sees.
+ */
+async function outageServer() {
+  let outages = 0;
+  let handshakes = 0;
+  const { app } = await harness.start({
+    auth: {
+      authenticate: (request) => {
+        handshakes += 1;
+        if (outages > 0) {
+          outages -= 1;
+          throw new Error("the session store is down");
+        }
+        return testAuth.authenticate?.(request);
+      },
+    },
+    logger: captureLogger(),
+  });
+  return {
+    app,
+    fail(times: number): void {
+      outages = times;
+    },
+    handshakes: () => handshakes,
+    /** Drops every socket's transport, as a network blip does: the clients reconnect. */
+    drop(): void {
+      for (const socket of app.server.io.sockets.sockets.values()) {
+        socket.conn.close();
+      }
+    },
+  };
+}
+
+/** Every state `connection` takes from now on. */
+function statesOf(connection: QuickdrawConnection): ConnectionState[] {
+  const states: ConnectionState[] = [];
+  connection.subscribe(() => {
+    states.push(connection.getState());
+  });
+  return states;
+}
+
+/** Socket.IO's reconnection delays, made short for a test. */
+const QUICK_RETRIES = { socketOptions: { reconnectionDelay: 20, reconnectionDelayMax: 40 } };
 
 describe("createQuickdrawConnection", () => {
   it("connects with the v5 handshake beside the credentials, and keeps the server's hello", async () => {
@@ -102,11 +157,11 @@ describe("createQuickdrawConnection", () => {
     }
   });
 
-  it("is refused with UNAUTHENTICATED, not a protocol mismatch, when authentication fails", async () => {
+  it("is refused with UNAUTHENTICATED, not a protocol mismatch, when authenticate refuses", async () => {
     const { app } = await harness.start({
       auth: {
         authenticate: () => {
-          throw new Error("the session expired");
+          throw new QuickdrawError("UNAUTHENTICATED", "the session expired");
         },
       },
       logger: captureLogger(),
@@ -163,6 +218,81 @@ describe("createQuickdrawConnection", () => {
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
   });
 
+  it("keeps the user through reconnects refused with INTERNAL, and connects again by itself", async () => {
+    const server = await outageServer();
+    const connection = await harness.connect(server.app.url, QUICK_RETRIES);
+    await until(() => connection.getState().hello !== null);
+    const reconnected = vi.fn();
+    connection.onReconnect(reconnected);
+    const states = statesOf(connection);
+    const before = server.handshakes();
+    // Socket.IO's own reconnect is refused, and so is the connection's first retry.
+    server.fail(2);
+    server.drop();
+    await until(() => connection.getState().reconnecting);
+    // A call made meanwhile waits in the send buffer, and goes out once the connection is back.
+    const pending = caller(connection);
+    await until(() => server.handshakes() === before + 3);
+    await whenStatus(connection, "connected");
+    expect(await pending).toBe("alice");
+    expect(states.map((state) => state.status)).not.toContain("refused");
+    expect(states.map((state) => state.status)).not.toContain("disconnected");
+    expect(states.every((state) => state.hello !== null && state.serviceAccess !== null)).toBe(
+      true,
+    );
+    for (const state of states.filter((each) => each.status === "connecting")) {
+      expect(state).toMatchObject({ reconnecting: true, refusal: null });
+    }
+    expect(reconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("connects by itself once the server can authenticate a first connect it refused with INTERNAL", async () => {
+    const server = await outageServer();
+    server.fail(1);
+    const connection = harness.connection(server.app.url, QUICK_RETRIES);
+    const states = statesOf(connection);
+    connection.open();
+    await until(() => connection.getState().hello?.userId === "alice");
+    expect(server.handshakes()).toBe(2);
+    expect(states.map((state) => state.status)).not.toContain("refused");
+    // never connected on these credentials: connecting, not reconnecting
+    expect(states.some((state) => state.reconnecting)).toBe(false);
+  });
+
+  it("is refused with INTERNAL, and keeps the user, once Socket.IO's reconnection is off", async () => {
+    const server = await outageServer();
+    const connection = await harness.connect(server.app.url, {
+      socketOptions: { reconnection: false },
+    });
+    await until(() => connection.getState().hello !== null);
+    const { hello, serviceAccess } = connection.getState();
+    server.fail(1);
+    connection.socket.disconnect();
+    connection.open();
+    await whenStatus(connection, "refused");
+    expect(connection.getState().refusal).toEqual({ code: "INTERNAL" });
+    expect(connection.getState().hello).toBe(hello);
+    expect(connection.getState().serviceAccess).toBe(serviceAccess);
+  });
+
+  it("stops connecting again when the app closes it", async () => {
+    const server = await outageServer();
+    server.fail(100);
+    const connection = harness.connection(server.app.url, {
+      socketOptions: { reconnectionDelay: 150, reconnectionDelayMax: 150 },
+    });
+    const refused: unknown[] = [];
+    connection.socket.on("connect_error", (error) => refused.push(error));
+    connection.open();
+    await until(() => refused.length === 1);
+    connection.close();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
+    expect(server.handshakes()).toBe(1);
+    expect(connection.getState().status).toBe("idle");
+  });
+
   it("keeps the hello through a refusal that is not the session's", async () => {
     const { app } = await harness.start();
     const onProtocolMismatch = vi.fn();
@@ -202,6 +332,7 @@ describe("createQuickdrawConnection", () => {
     expect(isSessionRefusal({ code: "FORBIDDEN" })).toBe(true);
     for (const data of [
       { code: "PROTOCOL_MISMATCH", expected: 6 },
+      { code: "INTERNAL" },
       { code: "REFUSED" },
       "UNAUTHENTICATED",
       null,

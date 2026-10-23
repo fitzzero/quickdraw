@@ -172,6 +172,12 @@ once:
   `request.sessionCookie` (HTTP), after `cookieOriginAllowed(request,
 allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
   only a bearer token for it.
+- `authenticate` refuses credentials only by throwing
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`). Anything else it
+  or `loadServiceAccess` throws is an outage (the store or the database
+  down): a socket's handshake is refused `INTERNAL`, and the client keeps
+  the user and connects again by itself. Never throw a plain `Error` for
+  bad credentials, which the client would retry for ever.
 
 ## Writes are tracked; frames are derived
 

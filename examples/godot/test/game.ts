@@ -115,30 +115,46 @@ export function gameService() {
   });
 }
 
-/** The user a handshake's `auth` names: a known `token`, or the principal `app.connect` sends. */
-function authenticate({
-  auth,
-}: {
-  readonly auth: Readonly<Record<string, unknown>>;
-}): string | null {
-  const { principal, token } = auth;
-  if (typeof principal === "object" && principal !== null && "userId" in principal) {
-    return String(principal.userId);
-  }
-  if (token === undefined) {
-    return null;
-  }
-  if (typeof token === "string" && TOKENS.includes(token)) {
-    return token;
-  }
-  throw new QuickdrawError("UNAUTHENTICATED", "Unknown token");
+/**
+ * A token whose first handshake on a server meets an outage of the session
+ * store (`authenticate` throws a plain `Error`, refused with `INTERNAL`);
+ * every later one signs in as user "flaky".
+ */
+export const FLAKY_TOKEN = "flaky";
+
+/**
+ * The user a handshake's `auth` names: a known `token` (the flaky one once
+ * the outage passed), or the principal `app.connect` sends.
+ */
+function authenticator() {
+  let outage = true;
+  return ({ auth }: { readonly auth: Readonly<Record<string, unknown>> }): string | null => {
+    const { principal, token } = auth;
+    if (typeof principal === "object" && principal !== null && "userId" in principal) {
+      return String(principal.userId);
+    }
+    if (token === undefined) {
+      return null;
+    }
+    if (token === FLAKY_TOKEN) {
+      if (outage) {
+        outage = false;
+        throw new Error("The session store is unavailable");
+      }
+      return token;
+    }
+    if (typeof token === "string" && TOKENS.includes(token)) {
+      return token;
+    }
+    throw new QuickdrawError("UNAUTHENTICATED", "Unknown token");
+  };
 }
 
 /** Starts the game server on a free port: a heartbeat every 300 ms, one query at a time, peer links. */
 export async function startServer() {
   return await createTestApp({
     services: [gameService()],
-    auth: { authenticate },
+    auth: { authenticate: authenticator() },
     limits: { maxInFlightQueries: 1, maxQueuedQueries: 0, retryAfterMs: 300 },
     socket: { pingInterval: 300, pingTimeout: 1000 },
     peers: true,

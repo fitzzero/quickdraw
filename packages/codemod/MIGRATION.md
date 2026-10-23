@@ -1087,7 +1087,11 @@ server's `authenticate` here is the auth routes kit's `socketAuth` (see
 until that step checks its session store on every handshake and call, and
 checks the session cookie's `Origin` (`cookieOriginAllowed`; on HTTP the
 cookie arrives in `request.sessionCookie`); never `verifyJWT` alone, which
-a signed-out session still passes until its JWT expires.
+a signed-out session still passes until its JWT expires. Its
+`authenticate` refuses credentials by throwing
+`QuickdrawError("UNAUTHENTICATED")`: anything else it throws is taken for
+the server's failure (a socket's handshake is refused `INTERNAL`, and the
+client keeps the user and connects again by itself).
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/index.ts#server -->
 

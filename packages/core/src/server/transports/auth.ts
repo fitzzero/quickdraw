@@ -195,17 +195,21 @@ export function socketAuthOf(authenticate: unknown): SocketAuthInfo | undefined 
 /**
  * True for a refusal `authenticate` made on purpose, by throwing a
  * `QuickdrawError` with code `UNAUTHENTICATED` (a revoked session, a socket
- * from a page the cookie may not be used from). The transports log those at
- * debug, as the client's doing, and every other failure at error.
+ * from a page the cookie may not be used from). The transports log those,
+ * and `isForbiddenCredential`'s, at debug, as the client's doing, and every
+ * other failure at error; the socket transport refuses another failure's
+ * handshake with `INTERNAL`, since the credentials may well be good.
  */
 export function isRefusal(error: unknown): boolean {
   return error instanceof QuickdrawError && error.code === "UNAUTHENTICATED";
 }
 
 /**
- * True for an HTTP call's refusal that `authenticate` made on purpose and
- * the transport answers as it is: a `QuickdrawError` with code `FORBIDDEN`
- * (a session cookie sent from a page `socketAuth` does not allow).
+ * True for a refusal that `authenticate` made on purpose with code
+ * `FORBIDDEN`, a `QuickdrawError` (a session cookie sent from a page
+ * `socketAuth` does not allow): the HTTP transport answers it as it is, and
+ * the socket transport refuses the handshake as it refuses an
+ * `UNAUTHENTICATED` one.
  */
 export function isForbiddenCredential(error: unknown): error is QuickdrawError {
   return error instanceof QuickdrawError && error.code === "FORBIDDEN";

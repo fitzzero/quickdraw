@@ -55,7 +55,9 @@ func _on_event(service: String, event: String, payload: Variant) -> void:
 | `server_id`                                        | The hello's `serverId`: new each time a server starts. Another one after a reconnect means a restarted server (or another node): a game's world and ticks start over.                                                |
 
 Signals: `connected(hello)`, `disconnected(reason)`, `refused(code, message)`
-(`PROTOCOL_MISMATCH` or `UNAUTHENTICATED`; it does not reconnect),
+(`PROTOCOL_MISMATCH` or `UNAUTHENTICATED`; it does not reconnect; a
+handshake the server could not authenticate, `INTERNAL`, is no refusal: the
+client connects again with backoff and keeps its user),
 `rotating(within_ms)` (`qd:rotate`: the socket stays open until the client's
 moment within the window),
 `event_received(service, event, payload)`,
@@ -155,7 +157,9 @@ What it does for you, as `docs/protocol-v5.md` asks of a client:
   that doubles up to 15 s (full jitter); on `qd:rotate` it keeps the socket,
   calls still answered, until a random moment within the window, then
   reconnects with a fresh handshake; it does not reconnect after the server
-  ended the socket or refused the handshake;
+  ended the socket or refused the handshake, but it does, the same way,
+  after a handshake the server could not authenticate (`INTERNAL`: its
+  session store was down), keeping its user;
 - waits for a call's acknowledgement at most the hello's `callTimeoutMs`
   and 2 s more, and fails calls in flight with `INTERNAL` when the
   connection drops;
