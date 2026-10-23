@@ -45,7 +45,17 @@ export interface ClusterSettings {
   readonly prefix: string;
   /** The Valkey the nodes connect to; default the cluster projects'. */
   readonly url?: string;
+  /**
+   * The adapter's `requestsTimeout`. Default 1,000 ms, the default
+   * `cluster.timeoutMs`, as `setupRedisAdapter` builds its adapter (the Redis
+   * adapter's own default is 5,000): a node that asks one closing at the same
+   * time hands over what came after a second, as it would in production.
+   */
+  readonly requestsTimeout?: number;
 }
+
+/** The request timeout of the nodes' adapters: the default `cluster.timeoutMs`, as `setupRedisAdapter` sets it. */
+const REQUESTS_TIMEOUT_MS = 1000;
 
 /** The server-to-server event a write's barrier travels on. */
 const BARRIER_EVENT = "qd-test:barrier";
@@ -63,9 +73,13 @@ export async function startNode<const S extends readonly AnyService[]>(
   sub.on("error", () => undefined);
   await Promise.all([pub.connect(), sub.connect()]);
   // A test app that fails to start (a strict app's startup warning) leaves no connection open.
+  const adapter = createAdapter(pub, sub, {
+    key: settings.prefix,
+    requestsTimeout: settings.requestsTimeout ?? REQUESTS_TIMEOUT_MS,
+  });
   const app = await create({
     ...options,
-    socket: { ...options.socket, adapter: createAdapter(pub, sub, { key: settings.prefix }) },
+    socket: { ...options.socket, adapter },
     cluster: { keyPrefix: settings.prefix, ...options.cluster },
   } as TestAppOptions<S>).catch(async (error: unknown) => {
     await Promise.all([pub, sub].map(closeClient));

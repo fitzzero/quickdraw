@@ -18,7 +18,7 @@ import {
 } from "../../src/client/live/entities";
 import type { EntityFrame, EntityResult, PresenceFrame } from "../../src/index";
 import { createHarness, type Harness } from "../../src/prisma/__tests__/harness";
-import { captureLogger, deferred } from "../../src/server/__tests__/fixtures";
+import { alice, bob, captureLogger, deferred } from "../../src/server/__tests__/fixtures";
 import {
   as,
   projectService as boardProjects,
@@ -54,6 +54,7 @@ import {
   send,
   settle,
 } from "../../src/server/realtime/__tests__/fixture";
+import { defineGameService, WORLD, WORLD_ID } from "../../src/server/realtime/__tests__/hostGame";
 import { PRESENCE_EVENT } from "../../src/server/realtime/presenceRequests";
 import {
   createTestApp,
@@ -514,27 +515,66 @@ describe("a stream's subscribers across nodes", () => {
     expect(await fromB?.subscribers("BTC")).toBe(1);
   });
 
-  it("count a node that does not answer within cluster.timeoutMs as 0, and say so once", async () => {
-    const prefix = uniquePrefix("subscribers");
-    const logger = captureLogger();
-    const asking = await startNode(
-      await create(),
-      { services: [priceService], logger, cluster: { timeoutMs: 200 } },
-      { prefix },
-    );
-    const silent = await startNode(await create(), { services: [priceService] }, { prefix });
-    running.push([asking, silent]);
-    await watcher(asking, "BTC");
-    await watcher(silent, "BTC");
-    // The node stops answering presence requests, as a stuck node would.
-    silent.app.server.io.removeAllListeners(PRESENCE_EVENT);
-    const price = asking.app.server.stream(prices, "price");
-    expect(await price.subscribers("BTC")).toBe(1);
-    expect(await price.subscribers("BTC")).toBe(1);
-    expect(
-      logger.at("warn").filter((entry) => entry.message.includes("subscriber count")),
-    ).toHaveLength(1);
-  });
+  const carol: Principal = { userId: "carol" };
+
+  /** A socket of `node` acting as `principal`, in the host game's world (an app room). */
+  async function inWorld(node: ClusterNode, principal: Principal): Promise<void> {
+    const connection = await node.app.connect(principal);
+    const calls = connection.call as unknown as {
+      gameService: { enter(input: { worldId: string }): Promise<boolean> };
+    };
+    expect(await calls.gameService.enter({ worldId: WORLD_ID })).toBe(true);
+  }
+
+  for (const silence of ["ignores the requests", "is frozen"] as const) {
+    it(`keep the other nodes' answers in a count and in presence when one node ${silence}, and say how many answered`, async () => {
+      const prefix = uniquePrefix("silent");
+      const logger = captureLogger();
+      const options = { services: [priceService, defineGameService()], peers: true };
+      // Each node's adapter hands over the answers that came after 300 ms, not its default 5 s.
+      const settings = { prefix, requestsTimeout: 300 };
+      const others = { ...options, logger: captureLogger() };
+      const asking = await startNode(await create(), { ...options, logger }, settings);
+      const answering = await startNode(await create(), others, settings);
+      const nodes = [asking, answering];
+      running.push(nodes);
+      const ghost = valkeyClient();
+      try {
+        await watcher(asking, "BTC");
+        await watcher(answering, "BTC");
+        await inWorld(asking, alice);
+        await inWorld(answering, bob);
+        if (silence === "ignores the requests") {
+          // A node of a version before 5.1.1 knows no `quickdraw:presence`: its sockets go uncounted.
+          const silent = await startNode(await create(), others, settings);
+          nodes.push(silent);
+          await watcher(silent, "BTC");
+          await inWorld(silent, carol);
+          silent.app.server.io.removeAllListeners(PRESENCE_EVENT);
+        } else {
+          // Subscribed to the adapter's requests, so counted among the nodes, and answering none.
+          await ghost.connect();
+          await ghost.subscribe(`${prefix}-request#/#`, () => undefined);
+        }
+        const price = asking.app.server.stream(prices, "price");
+        expect(await price.subscribers("BTC")).toBe(2);
+        expect((await asking.app.server.presence.users(WORLD)).sort()).toEqual(["alice", "bob"]);
+        expect(await asking.app.server.presence.isOnline("bob")).toBe(true);
+        expect(await price.subscribers("BTC")).toBe(2);
+        const warnings = logger.at("warn").map(({ message }) => message);
+        expect(warnings).toEqual([
+          expect.stringContaining(
+            "did not answer a stream's subscriber count in time: 1 other node answered",
+          ),
+          expect.stringContaining(
+            "did not answer a presence request in time: 1 other node answered",
+          ),
+        ]);
+      } finally {
+        await closeClient(ghost);
+      }
+    });
+  }
 });
 
 describe("setupRedisAdapter", () => {
@@ -576,6 +616,44 @@ describe("setupRedisAdapter", () => {
     } finally {
       await Promise.all([a.app.close(), b.app.close()]);
       await Promise.all([a.redis.cleanup(), b.redis.cleanup()]);
+    }
+  });
+
+  it("gives the adapter it builds cluster.timeoutMs as its request timeout, or the one it is given", async () => {
+    const create = (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+    const { hostname, port } = new URL(VALKEY_URL);
+    const cases = [
+      { timeoutMs: undefined, requestsTimeout: undefined, expected: 1000 },
+      { timeoutMs: 300, requestsTimeout: undefined, expected: 300 },
+      { timeoutMs: 300, requestsTimeout: 750, expected: 750 },
+    ];
+    for (const { timeoutMs, requestsTimeout, expected } of cases) {
+      const app = (await create({
+        services: [projectService, defineTaskService()],
+        db: h.db,
+        cluster: {
+          keyPrefix: uniquePrefix("timeout"),
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        },
+      })) as unknown as TestApp;
+      const redis = await setupRedisAdapter(app.server.io, {
+        host: hostname,
+        port: Number(port),
+        logger: captureLogger(),
+        ...(requestsTimeout === undefined ? {} : { requestsTimeout }),
+      });
+      try {
+        expect(redis.success).toBe(true);
+        const adapter = app.server.io.sockets.adapter as unknown as { requestsTimeout?: unknown };
+        expect(adapter.requestsTimeout).toBe(expected);
+        await expect(setupRedisAdapter(app.server.io, { requestsTimeout: 0 })).rejects.toThrow(
+          "setupRedisAdapter: requestsTimeout must be a number of milliseconds above 0",
+        );
+      } finally {
+        await app.close();
+        await redis.cleanup();
+      }
     }
   });
 

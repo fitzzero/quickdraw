@@ -34,6 +34,7 @@ import type { QuickdrawIo, QuickdrawServerSocket } from "./types";
 export type { ClusterOptions } from "../cluster/revisions";
 export { serveBroadcasts } from "../cluster/broadcasts";
 export { registerClusterDeployment } from "../cluster/deployment";
+export { registerClusterTimeout } from "../cluster/acks";
 
 /** The server-to-server event reloaded grants are broadcast on behind a cluster adapter. */
 export const GRANTS_EVENT = "quickdraw:grants";

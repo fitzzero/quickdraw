@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { Server } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureLogger } from "./__tests__/fixtures";
+import { registerClusterTimeout } from "./cluster/acks";
 import { registerDeployment } from "./cluster/deployment";
 import { isRedisAdapterAvailable, setupRedisAdapter } from "./redis";
 import { isModuleNotFound, loadRedisPeers } from "./redisPeers";
@@ -57,7 +58,7 @@ describe("isModuleNotFound", () => {
 });
 
 describe("setupRedisAdapter", () => {
-  it("keys the adapter by the server's cluster.keyPrefix, unless keyPrefix names another (RT-2)", async () => {
+  it("keys the adapter by the server's cluster.keyPrefix and times its requests by its cluster.timeoutMs, unless told others (RT-2)", async () => {
     const InMemory = new Server().of("/").adapter.constructor;
     const createAdapter = vi.fn(() => InMemory);
     const client = {
@@ -69,15 +70,22 @@ describe("setupRedisAdapter", () => {
     vi.mocked(loadRedisPeers).mockResolvedValue({ createAdapter, createClient: () => client });
     const named = io();
     registerDeployment(named, "myapp");
+    registerClusterTimeout(named, 300);
     const logger = captureLogger();
     await setupRedisAdapter(named, { logger });
     await setupRedisAdapter(io(), { logger });
-    await setupRedisAdapter(io(), { logger, keyPrefix: "legacy" });
+    await setupRedisAdapter(io(), { logger, keyPrefix: "legacy", requestsTimeout: 750 });
     expect(createAdapter.mock.calls.map((call: unknown[]) => call[2])).toEqual([
-      { key: "myapp" },
-      { key: "quickdraw" },
-      { key: "legacy" },
+      { key: "myapp", requestsTimeout: 300 },
+      { key: "quickdraw", requestsTimeout: 1000 },
+      { key: "legacy", requestsTimeout: 750 },
     ]);
+    for (const requestsTimeout of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(setupRedisAdapter(io(), { logger, requestsTimeout })).rejects.toThrow(
+        "setupRedisAdapter: requestsTimeout must be a number of milliseconds above 0",
+      );
+    }
+    expect(createAdapter).toHaveBeenCalledTimes(3);
   });
 
   it("warns that the peers are missing instead of logging a failure", async () => {

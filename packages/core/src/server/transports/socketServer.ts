@@ -37,6 +37,7 @@ import {
   refreshGrants,
   regrantsOf,
   registerClusterDeployment,
+  registerClusterTimeout,
   rotate,
   serveBroadcasts,
   type ClusterOptions,
@@ -168,6 +169,8 @@ export function createSocketServer(
   });
   // Before anything sends to or hears from the other nodes: every event carries the deployment.
   registerClusterDeployment(io, settings.cluster);
+  // `setupRedisAdapter` gives the adapter it builds this request timeout.
+  registerClusterTimeout(io, settings.cluster?.timeoutMs);
   const context: SocketContext = {
     dispatcher: settings.dispatcher,
     logger: settings.logger,

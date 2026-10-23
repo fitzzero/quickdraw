@@ -10,6 +10,21 @@
 /** How long a node waits on the rest of the cluster by default: `cluster.timeoutMs`. */
 export const DEFAULT_CLUSTER_TIMEOUT_MS = 1000;
 
+/** Each server's `cluster.timeoutMs`, by its Socket.IO server, for `setupRedisAdapter`. */
+const TIMEOUTS = new WeakMap<object, number>();
+
+/** Registers the `cluster.timeoutMs` of the server `io`, when it has one. */
+export function registerClusterTimeout(io: object, timeoutMs: number | undefined): void {
+  if (timeoutMs !== undefined) {
+    TIMEOUTS.set(io, timeoutMs);
+  }
+}
+
+/** The `cluster.timeoutMs` of the server `io`: its option, else 1,000. */
+export function clusterTimeoutOf(io: object): number {
+  return TIMEOUTS.get(io) ?? DEFAULT_CLUSTER_TIMEOUT_MS;
+}
+
 class Timeout extends Error {
   constructor(ms: number) {
     super(`no answer within ${ms} ms`);

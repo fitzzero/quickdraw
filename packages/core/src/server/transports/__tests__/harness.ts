@@ -114,9 +114,11 @@ export function next<T = unknown>(socket: ClientSocket, event: string): Promise<
  * A Socket.IO adapter that hands `serverSideEmit` to the other servers it was
  * made for: a cluster in one process. A broadcast that asks for answers
  * (`serverSideEmitWithAck`) gets one from each peer, as the Redis adapter's
- * does.
+ * does. With `requestsTimeout` it times out as that adapter does too: when
+ * the time passes before every peer answered, it hands over the answers
+ * that came, with an error.
  */
-export function peeredCluster(): {
+export function peeredCluster(options: { readonly requestsTimeout?: number } = {}): {
   readonly adapter: NonNullable<Partial<IoServerOptions>["adapter"]>;
   readonly servers: QuickdrawIo[];
 } {
@@ -127,6 +129,9 @@ export function peeredCluster(): {
   ) => Namespace["adapter"];
   type Peer = { _onServerSideEmit(args: unknown[]): void };
   class PeeredAdapter extends Base {
+    /** The Redis adapter's option of the same name, when the cluster was made with one. */
+    readonly requestsTimeout = options.requestsTimeout;
+
     override serverSideEmit(packet: unknown[]): void {
       const peers = servers.filter((peer) => peer.sockets !== this.nsp);
       const last = packet.at(-1);
@@ -140,14 +145,33 @@ export function peeredCluster(): {
       const responses: unknown[] = [];
       if (peers.length === 0) {
         ack(null, responses);
+        return;
       }
+      let done = false;
+      const timer =
+        this.requestsTimeout === undefined
+          ? undefined
+          : setTimeout(() => {
+              done = true;
+              ack(
+                new Error(
+                  `timeout reached: only ${responses.length} responses received out of ${peers.length}`,
+                ),
+                responses,
+              );
+            }, this.requestsTimeout);
+      const answer = (response: unknown): void => {
+        if (done) {
+          return;
+        }
+        responses.push(response);
+        if (responses.length === peers.length) {
+          done = true;
+          clearTimeout(timer);
+          ack(null, responses);
+        }
+      };
       for (const peer of peers) {
-        const answer = (response: unknown): void => {
-          responses.push(response);
-          if (responses.length === peers.length) {
-            ack(null, responses);
-          }
-        };
         (peer.sockets as unknown as Peer)._onServerSideEmit([...packet.slice(0, -1), answer]);
       }
     }

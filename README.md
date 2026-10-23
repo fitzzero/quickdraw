@@ -2931,11 +2931,14 @@ export function TaskRoom({
   a global stream; also on `server.stream` and `dispatcher.stream`) is how
   many sockets subscribe to the feed, on every node, anonymous ones
   included: the sockets a push reaches. Behind a cluster adapter the other
-  nodes answer one request with a count each, never their sockets; an
-  answer that does not arrive within `cluster.timeoutMs` counts as 0
+  nodes answer one request with a count each, never their sockets; a node
+  that does not answer in time counts as 0 while the others' answers count
   (warned at most once every 10 minutes), and so does a node of an earlier
-  version. `qd.rooms` refuses the stream rooms' reserved `qd:` names, and
-  Socket.IO's own rooms hold one node's sockets: count with `subscribers`.
+  version. "In time" is the adapter's own `requestsTimeout`, which
+  `setupRedisAdapter` sets to `cluster.timeoutMs`, or `cluster.timeoutMs`
+  for an adapter without one (docs/deploying.md). `qd.rooms` refuses the
+  stream rooms' reserved `qd:` names, and Socket.IO's own rooms hold one
+  node's sockets: count with `subscribers`.
   A host-served stream's handle refuses it, as it refuses `push`: only the
   host's client knows who subscribes.
 - A service's `streams: { <name>: { seed, validate } }` (type

@@ -144,7 +144,8 @@ export async function usersInRoom(state: PresenceState, room: string): Promise<s
 /**
  * How many sockets are in `room` on every node: this node's adapter room,
  * and behind a cluster adapter what the other nodes answer
- * (`presenceRequests.ts`), whose late answers count as 0. For a stream's
+ * (`presenceRequests.ts`): a node that does not answer in time counts as 0,
+ * the others' answers count. For a stream's
  * feed room (`StreamHandle.subscribers`): presence itself counts the users
  * of app rooms, never sockets.
  */
