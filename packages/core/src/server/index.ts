@@ -272,6 +272,7 @@ export type {
   AdminOutputOf,
   AdminPrepare,
   AdminPrepareCall,
+  AdminTransactionOptions,
   AdminWrite,
 } from "./kits/admin/types";
 

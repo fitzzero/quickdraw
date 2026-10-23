@@ -30,6 +30,7 @@ import {
   type AdminOnCommitted,
   type AdminOnWrite,
   type AdminPrepare,
+  type AdminTransactionOptions,
 } from "../../../index";
 import type { EntityOf } from "../../../../contract/infer";
 import type { Logger } from "../../../../contract/logger";
@@ -110,8 +111,12 @@ export interface TaskServiceOptions {
   readonly onWrite?: AdminOnWrite<EntityOf<typeof taskContract>, PrismaClient>;
   /** The admin kit's `onCommitted`. */
   readonly onCommitted?: AdminOnCommitted<EntityOf<typeof taskContract>>;
+  /** The admin kit's `transaction`: the hooks' transaction's time limits. */
+  readonly transaction?: AdminTransactionOptions;
   /** The test app's logger. */
   readonly logger?: Logger;
+  /** Make the test app's development warnings throw (`createTestApp`'s `strictWarnings`). */
+  readonly strictWarnings?: boolean;
 }
 
 /** The kit's task service: the admin kit under its default forms, and the read/write kit's get and update. */
@@ -133,6 +138,7 @@ export function defineTaskService(options: TaskServiceOptions = {}) {
         ...(options.prepare === undefined ? {} : { prepare: options.prepare }),
         ...(options.onWrite === undefined ? {} : { onWrite: options.onWrite }),
         ...(options.onCommitted === undefined ? {} : { onCommitted: options.onCommitted }),
+        ...(options.transaction === undefined ? {} : { transaction: options.transaction }),
       }),
     },
   });
@@ -202,6 +208,7 @@ export function adminApp() {
         services: [projectService, service],
         db: current().db,
         ...(options.logger === undefined ? {} : { logger: options.logger }),
+        ...(options.strictWarnings === undefined ? {} : { strictWarnings: options.strictWarnings }),
       });
       apps.push(app as unknown as TestApp);
       return { app, service };

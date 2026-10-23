@@ -23,6 +23,8 @@ export interface KitTransaction {
   readonly conflict?: string;
   /** The transaction's time limit in milliseconds; the client's default (Prisma's is 5 s) without it. */
   readonly timeoutMs?: number;
+  /** How long it may wait to start, in milliseconds; the client's default (Prisma's is 2 s) without it. */
+  readonly maxWaitMs?: number;
 }
 
 /**
@@ -47,6 +49,7 @@ function optionsOf(how: KitTransaction): object | undefined {
   const options = {
     ...(how.conflict === undefined ? {} : { isolationLevel: "Serializable" }),
     ...(how.timeoutMs === undefined ? {} : { timeout: how.timeoutMs }),
+    ...(how.maxWaitMs === undefined ? {} : { maxWait: how.maxWaitMs }),
   };
   return Object.keys(options).length === 0 ? undefined : Object.freeze(options);
 }

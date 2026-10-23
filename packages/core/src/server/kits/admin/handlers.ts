@@ -1,6 +1,6 @@
 // `admin.handlers(contract, { access?, displayName?, hiddenFields?,
 // editable?, fieldOverrides?, rowless?, grants?, prepare?, onWrite?,
-// onCommitted? })` (RFC 0003 section 12.4):
+// onCommitted?, transaction? })` (RFC 0003 section 12.4):
 // the admin kit's server half.
 // It finds the methods `admin.contract` made in the contract and returns an
 // implementation of each, to spread into `defineService`'s `methods`:
@@ -47,7 +47,10 @@
 // transaction, after the write, before it commits; `onCommitted` (finding
 // F6.5) once it has, in a detached unit of work, a throw logged: what must
 // wait until an edit is durable (a game applying an edited definition) goes
-// there (`rows.ts`).
+// there (`rows.ts`). `prepare` and `onWrite` run `checked`, as a handler's
+// statements are. `transaction` sets that transaction's time limits
+// (`timeoutMs`, `maxWaitMs`), for a large cascade `prepare` writes; it is
+// refused without a hook, which opens no transaction.
 
 import type { AnyContract } from "../../../contract/defineContract";
 import { admin as contractHalf, adminSpecOf, type AdminSpec } from "../../../contract/kits/admin";
@@ -73,6 +76,7 @@ import type {
   AdminOnCommitted,
   AdminOnWrite,
   AdminPrepare,
+  AdminTransactionOptions,
 } from "./types";
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -90,7 +94,11 @@ const OPTION_KEYS: readonly string[] = [
   "prepare",
   "onWrite",
   "onCommitted",
+  "transaction",
 ];
+
+/** The longest delay a timer honors: Node and browsers run a longer one at once. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -134,7 +142,7 @@ function checkOptions(options: unknown): UnknownRecord {
   }
   if (!isRecord(options)) {
     fail(
-      "options must be { access?, displayName?, hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, prepare?, onWrite?, onCommitted? }",
+      "options must be { access?, displayName?, hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, prepare?, onWrite?, onCommitted?, transaction? }",
     );
   }
   const unknownKey = Object.keys(options).find((key) => !OPTION_KEYS.includes(key));
@@ -142,6 +150,41 @@ function checkOptions(options: unknown): UnknownRecord {
     fail(`options has an unknown key "${unknownKey}"; the options are ${OPTION_KEYS.join(", ")}`);
   }
   return options;
+}
+
+/**
+ * `transaction`'s time limits, checked: positive numbers of milliseconds a
+ * timer honors, given with a hook (without one the kit opens no transaction).
+ */
+function checkTransaction(
+  transaction: unknown,
+  hooks: Readonly<Record<string, unknown>>,
+): AdminTransactionOptions | undefined {
+  if (transaction === undefined) {
+    return undefined;
+  }
+  if (!isRecord(transaction)) {
+    fail("transaction must be { timeoutMs?, maxWaitMs? }");
+  }
+  const unknownKey = Object.keys(transaction).find(
+    (key) => key !== "timeoutMs" && key !== "maxWaitMs",
+  );
+  if (unknownKey !== undefined) {
+    fail(`transaction has an unknown key "${unknownKey}"; it takes timeoutMs and maxWaitMs`);
+  }
+  for (const key of ["timeoutMs", "maxWaitMs"]) {
+    const value = transaction[key];
+    // A comparison is false for NaN, so this refuses it with the rest.
+    if (value !== undefined && !(typeof value === "number" && value > 0 && value <= MAX_TIMER_MS)) {
+      fail(`transaction.${key} must be a positive number of milliseconds, at most ${MAX_TIMER_MS}`);
+    }
+  }
+  if (Object.values(hooks).every((hook) => hook === undefined)) {
+    fail(
+      "transaction sets the time limits of the transaction the kit writes in with prepare, onWrite or onCommitted; give one of them, or leave transaction out",
+    );
+  }
+  return Object.freeze({ ...transaction }) as AdminTransactionOptions;
 }
 
 /** The forms `access` gives, each for one of the kit's methods. */
@@ -308,10 +351,11 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
     onWrite: onWrite as AdminOnWrite | undefined,
     onCommitted: onCommitted as AdminOnCommitted | undefined,
   };
+  const transaction = checkTransaction(checked.transaction, hooks);
   const entries: Record<string, object> = {};
   for (const [name, spec] of kit) {
     const form = (access[name] as AccessForm | undefined) ?? ADMIN_DEFAULT_ACCESS;
-    const handler = handlerOf({ spec, fieldsFor, form, ...hooks });
+    const handler = handlerOf({ spec, fieldsFor, form, transaction, ...hooks });
     checkWhenDefined(handler, (service) => serviceProblem(service, contract, fields));
     checkWhenServed(handler, (served) =>
       servedProblemOf(fieldsFor, checked.grants === true, served),
@@ -332,9 +376,9 @@ function handlers<C extends AnyContract, const A extends AdminAccess<C> = Empty,
 /**
  * The admin kit: `admin.handlers(contract, { access?, displayName?,
  * hiddenFields?, editable?, fieldOverrides?, rowless?, grants?, prepare?,
- * onWrite?, onCommitted? })` implements the methods `admin.contract` made in
- * `contract`, each open to a service-wide `Admin` grant unless `access` gives
- * another form. `admin.contract` is here too, for server code; a shared
- * package imports it from the root export.
+ * onWrite?, onCommitted?, transaction? })` implements the methods
+ * `admin.contract` made in `contract`, each open to a service-wide `Admin`
+ * grant unless `access` gives another form. `admin.contract` is here too,
+ * for server code; a shared package imports it from the root export.
  */
 export const admin = Object.freeze({ contract: contractHalf.contract, handlers });

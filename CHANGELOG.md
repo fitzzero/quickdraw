@@ -353,6 +353,24 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   delete or clear them through `db` in `prepare`, and their subscribers are
   told. An `adminDelete` with `prepare` reads the row first, one statement
   more. `AdminPrepare` and `AdminPrepareCall` are on `./server`.
+- **The admin kit's hook transaction takes time limits.** The transaction
+  the kit writes in with `prepare`, `onWrite` or `onCommitted` took the
+  database client's default, Prisma's 5 seconds, so a large cascade
+  written in `prepare` (a user's delete clearing their rows in every
+  service) could fail on time alone. `admin.handlers`' new option
+  `transaction: { timeoutMs, maxWaitMs }` gives it others: how long it may
+  run before the client rolls it back, and how long it may wait for a
+  connection to start on (Prisma's default is 2 seconds). A write that
+  runs past `timeoutMs` is undone and fails `INTERNAL`. Each must be a
+  positive number of milliseconds a timer honors (at most 2147483647), and
+  `transaction` without a hook, which opens no transaction, is a
+  `TypeError` from `admin.handlers`. `AdminTransactionOptions` is on
+  `./server`.
+- **The admin kit's `onWrite` gets the development checks.** Its
+  statements ran unchecked, as the kit's own do, so a loop of writes in it
+  was never reported. It now runs `checked`, as `prepare` and the other
+  kits' callbacks do: twelve rows written one by one there are an
+  `n-plus-one`, which a strict test app throws.
 - **`ctx.access` asks the caller's level on any row.**
   `ctx.access.levelsFor(service, ids)`, `can(service, id, level)` and
   `where(service, level)` are `dispatcher.access`'s `levelsFor` and
