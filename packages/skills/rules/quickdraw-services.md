@@ -219,9 +219,11 @@ writes made through `db`, after the response is sent:
   nest through `tx.$transaction(async (inner) => ...)`: a savepoint, whose
   writes are sent only if it and the transaction around it commit (a
   rolled-back savepoint's are dropped, even when the outer one catches and
-  commits). A write through `db` there runs outside the transaction, yet is
-  recorded with it: when the transaction rolls back, its frames are dropped
-  though its row stays.
+  commits). Work on `db` there (a write, or a `db.$transaction` of its own)
+  runs outside the transaction and commits on its own, and its frames are
+  sent whatever the transaction does: write through `tx` what must commit
+  or roll back with it. On PGlite, with one connection, such work waits for
+  the transaction to end.
 - Raw SQL writes and database cascades are not seen: record them with
   `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
   passes `fn` the same `touch`. Before deleting a row whose dependents the

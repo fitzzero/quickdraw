@@ -14,6 +14,12 @@
 //   transaction nested in another (a savepoint) has a frame of its own
 //   inside the other's, so its writes join that one's buffer only when it
 //   commits, and its rollback discards them while the other goes on;
+// - work on the root client inside a transaction's callback runs outside
+//   the transaction, on a connection of its own: a transaction begun there
+//   commits on its own, and a write made there is durable at once, so both
+//   skip every transaction frame they run in, for the nearest unit's buffer
+//   (`outsideTransactions`; the adapter says which work is the root
+//   client's);
 // - a unit begun inside another open frame (an in-process call made from a
 //   handler, `qd.run` inside a transaction) joins it: its writes go where
 //   the enclosing frame's go, and its own flush does nothing; a detached
@@ -95,6 +101,29 @@ export interface TrackedTransaction {
   rollback(): void;
 }
 
+/** Options of {@link WriteTracker.openTransaction}. */
+export interface OpenTransactionOptions {
+  /**
+   * Nested in the transaction it runs in (a savepoint of it, begun on that
+   * transaction's client): its writes join that transaction's buffer when
+   * it commits. Without it the transaction is one of its own, begun on the
+   * root client, which commits on its own whatever transaction it was begun
+   * in: its writes skip every transaction frame, for the nearest unit's.
+   */
+  readonly nested?: boolean;
+}
+
+/** Where work the adapter reports ran: {@link WriteTracker.record}, `observe`. */
+export interface WorkOrigin {
+  /**
+   * On the root client, inside an interactive transaction's callback: it
+   * runs outside that transaction (and any around it), so its writes skip
+   * every transaction frame, for the nearest unit's buffer, and its
+   * statements are checked as a unit's. Unset: where it runs.
+   */
+  readonly outsideTransactions?: boolean;
+}
+
 /** A statement count, from {@link WriteTracker.countStatements}. */
 export interface StatementCount<T> {
   readonly value: T;
@@ -120,14 +149,21 @@ export interface WriteTrackerOptions {
 export interface WriteTracker {
   /** The units of work of handler runs and `qd.run` blocks: give it to the dispatcher. */
   readonly unitOfWork: UnitOfWorkFactory;
-  /** Records writes where they ran: an open transaction, a unit of work, or the next tick's ambient flush. */
-  record(writes: readonly WriteRecord[]): void;
+  /**
+   * Records writes where they ran: an open transaction, a unit of work, or
+   * the next tick's ambient flush; with `outsideTransactions`, past every
+   * open transaction.
+   */
+  record(writes: readonly WriteRecord[], origin?: WorkOrigin): void;
   /** Records `ids` of `model` as changed, or as deleted with `removed`: `ctx.touch`. */
   touch(model: string, ids: readonly string[], options?: TouchOptions): void;
   /** Counts one statement in every open frame where it runs. */
   countStatement(): void;
-  /** Opens a transaction frame inside the active one. */
-  openTransaction(kind: "interactive" | "batch"): TrackedTransaction;
+  /** Opens a transaction frame inside the active one; see {@link OpenTransactionOptions}. */
+  openTransaction(
+    kind: "interactive" | "batch",
+    options?: OpenTransactionOptions,
+  ): TrackedTransaction;
   /** The client of the open interactive transaction where this runs, or `undefined`. */
   transactionClient(): unknown;
   /** True inside an array-form transaction. */
@@ -145,9 +181,10 @@ export interface WriteTracker {
   /**
    * Hands a statement the database client is about to run to the checks of
    * the method call it runs in (development only; nothing outside a call,
-   * nor inside `quietly`).
+   * nor inside `quietly`); with `outsideTransactions`, as one run outside
+   * the open transaction.
    */
-  observe(statement: Statement): void;
+  observe(statement: Statement, origin?: WorkOrigin): void;
   /** The logger warnings go to: the attached dispatcher's, or the one given at creation. */
   readonly logger: Logger;
 }
@@ -209,21 +246,24 @@ function warn(state: TrackerState, warning: TrackerWarning): void {
   (frame.warnings ?? state.warnings).warn({ ...warning, ...frame.call });
 }
 
-/** Where a statement runs: the innermost open buffer is a unit's, a batch's or an interactive transaction's. */
-function placeOf(state: TrackerState): StatementPlace {
+/**
+ * Where a statement runs: the innermost open buffer is a unit's, a batch's or
+ * an interactive transaction's; outside the open transactions, a unit's.
+ */
+function placeOf(state: TrackerState, origin: WorkOrigin | undefined): StatementPlace {
   const open = frameWhere(state, (candidate) => candidate.buffer !== undefined);
   if (open?.batch === true) {
     return "batch";
   }
-  return open?.tx === undefined ? "unit" : "interactive";
+  return open?.tx === undefined || origin?.outsideTransactions === true ? "unit" : "interactive";
 }
 
-function observe(state: TrackerState, statement: Statement): void {
+function observe(state: TrackerState, statement: Statement, origin: WorkOrigin | undefined): void {
   if (!state.development || isQuiet()) {
     return;
   }
   const frame = frameWhere(state, (candidate) => candidate.check !== undefined);
-  frame?.check?.(statement, placeOf(state));
+  frame?.check?.(statement, placeOf(state, origin));
 }
 
 function notify(state: TrackerState, writes: readonly WriteRecord[]): void {
@@ -345,17 +385,22 @@ async function runLoose<T>(fn: () => T | PromiseLike<T>): Promise<T> {
   }
 }
 
-/** Puts `writes` in the first open buffer at or above `from`, or flushes them on their own. */
+/**
+ * Puts `writes` in the first open buffer at or above `from` (a durable one,
+ * a unit's, when they ran outside every transaction), or flushes them on
+ * their own.
+ */
 function deliver(
   state: TrackerState,
   writes: readonly WriteRecord[],
   from: Frame | undefined,
+  outsideTransactions = false,
 ): void {
   if (writes.length === 0) {
     return;
   }
   for (let frame = from; frame !== undefined; frame = frame.parent) {
-    if (frame.open && frame.buffer !== undefined) {
+    if (frame.open && frame.buffer !== undefined && (frame.durable || !outsideTransactions)) {
       frame.buffer.push(...writes);
       if (frame.durable) {
         notify(state, writes);
@@ -368,8 +413,14 @@ function deliver(
   }
 }
 
-function openTransaction(state: TrackerState, kind: "interactive" | "batch"): TrackedTransaction {
+function openTransaction(
+  state: TrackerState,
+  kind: "interactive" | "batch",
+  options: OpenTransactionOptions | undefined,
+): TrackedTransaction {
   const parent = state.als.getStore();
+  // One begun on the root client commits on its own, whatever transaction it was begun in.
+  const own = options?.nested !== true;
   const frame: Frame = {
     parent,
     buffer: [],
@@ -389,7 +440,7 @@ function openTransaction(state: TrackerState, kind: "interactive" | "batch"): Tr
     run: (fn) => state.als.run(frame, async () => await fn()),
     commit: () => {
       frame.open = false;
-      deliver(state, frame.buffer ?? [], parent);
+      deliver(state, frame.buffer ?? [], parent, own);
     },
     rollback: () => {
       frame.open = false;
@@ -572,7 +623,8 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
   ISSUED.set(unitOfWork, () => state.issued);
   return Object.freeze({
     unitOfWork,
-    record: (writes: readonly WriteRecord[]) => deliver(state, writes, state.als.getStore()),
+    record: (writes: readonly WriteRecord[], origin?: WorkOrigin) =>
+      deliver(state, writes, state.als.getStore(), origin?.outsideTransactions === true),
     touch,
     countStatement(): void {
       state.issued += 1;
@@ -582,7 +634,8 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
         }
       }
     },
-    openTransaction: (kind: "interactive" | "batch") => openTransaction(state, kind),
+    openTransaction: (kind: "interactive" | "batch", opened?: OpenTransactionOptions) =>
+      openTransaction(state, kind, opened),
     transactionClient: () => frameWhere(state, (frame) => frame.tx !== undefined)?.tx,
     inBatch: () => frameWhere(state, (frame) => frame.buffer !== undefined)?.batch === true,
     countStatements: <T>(fn: () => T | PromiseLike<T>) => countStatements(state, fn),
@@ -593,7 +646,7 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
       };
     },
     warn: (warning: TrackerWarning) => warn(state, warning),
-    observe: (statement: Statement) => observe(state, statement),
+    observe: (statement: Statement, origin?: WorkOrigin) => observe(state, statement, origin),
     get logger() {
       return state.logger;
     },

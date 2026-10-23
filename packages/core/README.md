@@ -954,10 +954,12 @@ tracked client as `db`; the server finds the rest on it.
   around it when the savepoint is released, and are dropped when it rolls
   back, even when the transaction around it catches the error and commits.
   Inside a transaction's callback, write through its client (`tx`,
-  `inner`): a write through `db` there, or a `db.$transaction` of its own,
-  runs outside the transaction, on a connection of its own, yet is recorded
-  with it, so when the transaction rolls back its frames are dropped though
-  its rows stay.
+  `inner`) what must commit or roll back with it. Work on `db` there runs
+  outside the transaction, on a connection of its own, and is tracked as
+  such: a write (a `createMany` or `updateMany` too) commits at once, and a
+  `db.$transaction` of its own commits on its own, so their frames are sent
+  whatever the transaction then does. (A database with one connection, as
+  PGlite in tests, runs that work only once the transaction ends.)
 - Write many rows in one statement when every row gets the same data
   (`updateMany`, `createMany`). When each row's data differs (moving tasks
   to different projects, say), write each row by id inside an interactive

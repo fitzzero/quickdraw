@@ -143,6 +143,31 @@ describe("a tracked unit of work", () => {
     expect(sink.writes()).toEqual([write("t1", "create")]);
   });
 
+  it("records the root client's writes past open transactions, and nests only nested ones", async () => {
+    const tracker = createWriteTracker({ development: false });
+    const sink = createRecordingSink();
+    const unit = tracker.unitOfWork.begin(scope(sink));
+    await unit.run(async () => {
+      const outer = tracker.openTransaction("interactive");
+      outer.setClient("tx");
+      await outer.run(async () => {
+        tracker.record([write("in", "create")]);
+        // The root client's write, made in the callback: durable at once.
+        tracker.record([write("root", "create")], { outsideTransactions: true });
+        // A transaction begun on the root client commits on its own; a savepoint joins `outer`.
+        const own = tracker.openTransaction("interactive");
+        await own.run(() => tracker.record([write("own", "create")]));
+        own.commit();
+        const nested = tracker.openTransaction("interactive", { nested: true });
+        await nested.run(() => tracker.record([write("nested", "create")]));
+        nested.commit();
+      });
+      outer.rollback();
+    });
+    await unit.flush();
+    expect(sink.writes()).toEqual([write("root", "create"), write("own", "create")]);
+  });
+
   it("knows an array-form transaction from an interactive one", async () => {
     const tracker = createWriteTracker({ development: false });
     const batch = tracker.openTransaction("batch");

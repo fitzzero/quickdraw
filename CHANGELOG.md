@@ -468,6 +468,28 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `$transaction`, either form: a nested transaction's writes join the one
   around it when the savepoint is released, and are dropped when it rolls
   back. The callback's client is otherwise Prisma's.
+- **Behavior change: work on the root client inside a transaction's
+  callback is tracked outside the transaction, as it runs.** A write
+  through `db` inside `db.$transaction(async (tx) => ...)` runs on a
+  connection of its own and commits at once, and a `db.$transaction`
+  begun there commits on its own, but the tracker recorded both into the
+  transaction's frame: when the transaction rolled back, their frames were
+  dropped though their rows stayed. Worse, the hook ran a root `createMany`
+  or `updateMany` there as its `...AndReturn` form through the
+  transaction's client, which moved the write into the transaction, so it
+  rolled back with it, and read a root `update`'s or `deleteMany`'s rows
+  through it too (a real PostgreSQL showed a root `deleteMany` recorded as
+  deleting a row the transaction created and then committed, so neither was
+  sent). Interactive transactions now begin on a client with a hook of
+  their own, which tells a transaction client's operations from the root
+  client's: the root client's reads and writes go through the root client,
+  and its writes, and those of a transaction of its own, skip every open
+  transaction frame for the unit's. A transaction client's work, an
+  array-form batch's operations and nested transactions are tracked as
+  before. On PGlite, which has one connection, root work inside a callback
+  waits for the transaction to end, now a root `createMany` or
+  `updateMany` too: a test that makes one there runs into the
+  transaction's timeout; write it through `tx`.
 
 ### Testing
 
