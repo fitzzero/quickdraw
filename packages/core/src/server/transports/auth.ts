@@ -84,11 +84,15 @@ export type AuthenticateResult<P extends Principal> =
 export interface ServerAuth<P extends Principal = Principal> {
   /**
    * Says who is calling. Throwing refuses the socket connection ("Authentication
-   * failed", with `{ code: "UNAUTHENTICATED" }` as the `connect_error` data) or
-   * answers the HTTP call with `UNAUTHENTICATED`; returning nothing lets the
-   * caller in anonymously, so only `"public"` methods pass. Throw a
-   * `QuickdrawError("UNAUTHENTICATED", ...)` for a refusal that is the
-   * caller's doing (it logs at debug; anything else thrown logs at error).
+   * failed") or answers the HTTP call with `UNAUTHENTICATED`; returning
+   * nothing lets the caller in anonymously, so only `"public"` methods pass.
+   * Throw a `QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) for a
+   * refusal that is the caller's doing: it logs at debug, and a socket's
+   * `connect_error` data is `{ code: "UNAUTHENTICATED" }`, which signs a
+   * client out. Anything else thrown is the server's failure (its session
+   * store down, say): it logs at error, and the data is `{ code: "INTERNAL" }`,
+   * which a client retries, keeping the user, so never throw a plain `Error`
+   * for bad credentials.
    * On an HTTP call a thrown `QuickdrawError("FORBIDDEN", ...)` is answered
    * as it is, with 403 (logged at debug): a credential the request may not
    * use from where it came, as `socketAuth` answers a session cookie sent
