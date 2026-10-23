@@ -141,6 +141,22 @@ export async function usersInRoom(state: PresenceState, room: string): Promise<s
   return [...new Set([...remote, ...localUsers(records, room)])];
 }
 
+/**
+ * How many sockets are in `room` on every node: this node's adapter room,
+ * and behind a cluster adapter what the other nodes answer
+ * (`presenceRequests.ts`), whose late answers count as 0. For a stream's
+ * feed room (`StreamHandle.subscribers`): presence itself counts the users
+ * of app rooms, never sockets.
+ */
+export async function socketsInRoom(state: PresenceState, room: string): Promise<number> {
+  const { io } = state.hub;
+  if (io === undefined) {
+    return 0;
+  }
+  const remote = state.hub.probe.local() ? 0 : await state.requests.sockets(room);
+  return remote + (io.sockets.adapter.rooms.get(room)?.size ?? 0);
+}
+
 /** True while some socket of `userId` is in `room`, on any node. */
 export async function inRoom(state: PresenceState, room: string, userId: string): Promise<boolean> {
   return (await usersInRoom(state, room)).includes(userId);

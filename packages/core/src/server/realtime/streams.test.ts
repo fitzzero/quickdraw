@@ -697,6 +697,60 @@ async function startWorlds(
   return app;
 }
 
+describe("subscribers", () => {
+  it("counts the sockets that subscribe to a feed, anonymous ones included, until they leave it", async () => {
+    const app = await start();
+    const rooms = app.server.stream(liveContract, "rooms");
+    expect(await rooms.subscribers("a")).toBe(0);
+    const cy = await connect(app, as(board.cy));
+    const anonymous = await connect(app, null);
+    for (const { connection } of [cy, anonymous]) {
+      expect(await streamSub(connection, "rooms", "a")).toEqual({ ok: true, seed: [] });
+    }
+    expect(await rooms.subscribers("a")).toBe(2);
+    expect(await rooms.subscribers("b")).toBe(0);
+    await streamUnsub(cy.connection, "rooms", "a");
+    expect(await rooms.subscribers("a")).toBe(1);
+    anonymous.connection.socket.disconnect();
+    await vi.waitFor(async () => {
+      expect(await rooms.subscribers("a")).toBe(0);
+    });
+  });
+
+  it("counts a global stream's subscribers, a socket that subscribed twice once", async () => {
+    const app = await start();
+    const ticks = app.server.stream(liveContract, "ticks");
+    const { connection } = await connect(app, null);
+    await streamSub(connection, "ticks");
+    await streamSub(connection, "ticks");
+    expect(await ticks.subscribers()).toBe(1);
+    // a subscribe the stream's access refuses puts nobody in the feed
+    const anonymous = await connect(app, null);
+    expect(await streamSub(anonymous.connection, "status")).toEqual(refused("UNAUTHENTICATED"));
+    expect(await app.server.stream(liveContract, "status").subscribers()).toBe(0);
+  });
+
+  it("rejects a scope that does not fit the stream, as push refuses one", async () => {
+    const app = await start();
+    const rooms = app.server.stream(liveContract, "rooms") as unknown as {
+      subscribers(...args: unknown[]): Promise<number>;
+    };
+    const ticks = app.server.stream(liveContract, "ticks") as unknown as {
+      subscribers(...args: unknown[]): Promise<number>;
+    };
+    await expect(rooms.subscribers()).rejects.toThrow(
+      "taskService.rooms.subscribers: rooms is scoped: its scope is a string of 1 to",
+    );
+    await expect(rooms.subscribers("")).rejects.toThrow(TypeError);
+    await expect(rooms.subscribers("a", "b")).rejects.toThrow(
+      "taskService.rooms.subscribers: pass (scope)",
+    );
+    await expect(ticks.subscribers("a")).rejects.toThrow(
+      "taskService.ticks.subscribers: ticks is a global stream: it takes no scope",
+    );
+  });
+});
+
 describe("a seed the service computes", () => {
   it("answers each subscriber with the current state, under its principal, then the items pushed after it", async () => {
     const worlds = new Map<string, unknown>([["w1", { tick: 3, food: ["a", "b"] }]]);
@@ -1072,6 +1126,7 @@ describe("qd.stream and qd.presence", () => {
     expect(() => {
       news.push("early");
     }).toThrow("qd.stream has no dispatcher to push through");
+    await expect(news.subscribers()).rejects.toThrow("qd.stream has no dispatcher");
     await expect(local.presence.isOnline("u1")).rejects.toThrow("qd.presence has no dispatcher");
     expect(() => local.stream(feed, "nope" as "news")).toThrow(
       'qd.stream: feedService declares no stream "nope"',
@@ -1095,6 +1150,7 @@ describe("qd.stream and qd.presence", () => {
         stream: "news",
       });
       expect(reply).toEqual({ ok: true, seed: ["two", "three"] });
+      expect(await news.subscribers()).toBe(1);
       expect(await local.presence.isOnline("u1")).toBe(true);
       expect(await local.presence.isOnline("u2")).toBe(false);
     } finally {

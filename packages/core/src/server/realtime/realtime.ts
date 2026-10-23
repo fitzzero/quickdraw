@@ -10,7 +10,7 @@ import { onDisconnect } from "../emit/answer";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket, SocketContext } from "../transports/types";
 import { channelMessages } from "./channels";
-import { createPresence, createPresenceState } from "./presence";
+import { createPresence, createPresenceState, socketsInRoom } from "./presence";
 import { createRooms, unjoinable, type DetachedRun, type RoomLeaveHook } from "./rooms";
 import { createStreams, type Streams } from "./streams";
 import type {
@@ -97,7 +97,7 @@ export interface RealtimePeers {
 export function createRealtime(hub: Hub, peers?: RealtimePeers): Realtime {
   const state = createPresenceState(hub);
   const presence = createPresence(state);
-  const streams = createStreams(hub);
+  const streams = createStreams(hub, (room) => socketsInRoom(state, room));
   const rooms = createRooms(
     state,
     (socket) => {

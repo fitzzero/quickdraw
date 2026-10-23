@@ -290,6 +290,20 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   handler's `db` and `initQuickdraw<{ db: typeof db }>` are unchanged, and
   so is code that types the client `PrismaClient`. Both types are on
   `./prisma` and on the root export, for a shared package without Prisma.
+- **A job can count a stream's subscribers.**
+  `await qd.stream(contract, name).subscribers(scope)` (`subscribers()` for
+  a global stream; also on `server.stream` and `dispatcher.stream`)
+  resolves with how many sockets subscribe to that feed on every node,
+  anonymous ones included, so a job skips the work nobody watches: a price
+  poll pushes only the instruments someone has open. Until now a job read
+  Socket.IO's adapter rooms itself, which hold one node's sockets.
+  Behind a cluster adapter the other nodes answer one request with a count
+  each (presence's event, with a new `{ sockets }` request), so no socket
+  is serialized. An answer that does not arrive within `cluster.timeoutMs`
+  counts as 0, warned at most once every 10 minutes, and so does a node of
+  an earlier version. A scope that does not fit rejects with a
+  `TypeError`, and a host-served stream's handle refuses it, as it refuses
+  `push`. `StreamSubscribersArgs` is on `./server`.
 
 ### Testing
 

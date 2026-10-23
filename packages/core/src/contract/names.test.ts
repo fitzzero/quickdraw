@@ -4,6 +4,7 @@ import {
   RESERVED_ROOM_PREFIXES,
   SERVER_EVENTS,
   SERVICE_TOPIC,
+  STREAM_ROOM_PREFIX,
   collectionRoom,
   collectionTopic,
   entityRoom,
@@ -33,6 +34,10 @@ describe("room names", () => {
   it("names a stream feed's room, with the scope for a scoped stream only", () => {
     expect(streamRoom("taskService", "logs", "t1")).toBe("qd:s:taskService:logs:t1");
     expect(streamRoom("opsService", "metrics")).toBe("qd:s:opsService:metrics");
+    // the prefix the nodes count stream rooms by (presenceRequests.ts)
+    for (const room of [streamRoom("s", "n", "1"), streamRoom("s", "n")]) {
+      expect(room.startsWith(STREAM_ROOM_PREFIX), room).toBe(true);
+    }
   });
 
   it("reserves the framework's room prefixes, which every framework room starts with", () => {

@@ -289,7 +289,10 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
 
 - Streams: `streams: { logs: { item, scope: "taskId", seed: 50, access } }`;
   push with `qd.stream(task, "logs").push(taskId, item)`, and several items
-  at once with `pushMany(taskId, items)`, never `push` in a loop. When the
+  at once with `pushMany(taskId, items)`, never `push` in a loop. A job that
+  skips feeds nobody watches asks
+  `await qd.stream(task, "logs").subscribers(taskId)` (the sockets on every
+  node), never Socket.IO's adapter rooms, which hold one node's. When the
   items are deltas (a game's ticks), give the service a computed seed,
   `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
   never a bootstrap call beside the stream; `validate: "development"` there

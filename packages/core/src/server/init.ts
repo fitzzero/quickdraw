@@ -130,10 +130,12 @@ export interface Quickdraw<T extends QuickdrawTypes> {
   /**
    * The handle of a stream (RFC 0003 section 12.5), for handlers, jobs and
    * timers: `qd.stream(task, "logs").push(taskId, line)` (`push(item)` for a
-   * global stream; `pushMany(taskId, lines)` for several at once). Each push
-   * goes through the dispatcher this instance created last, so a handle can
-   * be made when a module loads; pushing before any dispatcher exists, or to
-   * a stream it does not serve, throws.
+   * global stream; `pushMany(taskId, lines)` for several at once), and
+   * `await qd.stream(task, "logs").subscribers(taskId)`, how many sockets
+   * watch the feed on every node. Each use goes through the dispatcher this
+   * instance created last, so a handle can be made when a module loads;
+   * pushing before any dispatcher exists, or to a stream it does not serve,
+   * throws (`subscribers` rejects).
    * Throws a `TypeError` at once for a stream the contract does not declare.
    */
   stream<C extends AnyContract, K extends keyof C["streams"] & string>(
@@ -210,6 +212,10 @@ function streamOf(
     },
     pushMany(...args: unknown[]): void {
       (handle().pushMany as (...items: unknown[]) => void)(...args);
+    },
+    // Async, so every refusal (no dispatcher, a host-served stream, a bad scope) rejects.
+    async subscribers(...args: unknown[]): Promise<number> {
+      return await (handle().subscribers as (...scope: unknown[]) => Promise<number>)(...args);
     },
   }) as StreamHandle<AnyContract, string>;
 }

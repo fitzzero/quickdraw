@@ -5,7 +5,8 @@
 // logout everywhere, a removal no scope could be named for reaching
 // subscribers on both nodes, a channel's app room requirement checked on
 // the sending socket's own node, and a stream's seed on a node that started
-// after the pushes (kept seeds are per node; a computed one is not). Clients
+// after the pushes (kept seeds are per node; a computed one is not), and a
+// stream's subscribers counted on every node, from either one. Clients
 // connect to node A (`app.connect`), or to node B through `nodesOf(app)`;
 // writes go through node B.
 
@@ -53,6 +54,7 @@ import {
   send,
   settle,
 } from "../../src/server/realtime/__tests__/fixture";
+import { PRESENCE_EVENT } from "../../src/server/realtime/presenceRequests";
 import {
   createTestApp,
   emitWithAck,
@@ -464,6 +466,74 @@ describe("a stream's seed on a node that started after the pushes", () => {
     await vi.waitFor(() => {
       expect(items).toHaveLength(1);
     });
+  });
+});
+
+describe("a stream's subscribers across nodes", () => {
+  const prices = defineContract("priceService", {
+    streams: { price: { item: z.number(), scope: "instrumentId", access: "public" } },
+  });
+  const priceService = initQuickdraw<{ principal: Principal }>().defineService(prices, {
+    methods: {},
+  });
+
+  /** The single-server `createTestApp`: these tests boot each node themselves. */
+  async function create(): Promise<CreateTestApp> {
+    return (await vi.importActual<typeof Testing>("../../src/testing/createTestApp"))
+      .createTestApp as CreateTestApp;
+  }
+
+  /** A socket of `node`, subscribed to the price feed of `instrumentId`. */
+  async function watcher(node: ClusterNode, instrumentId: string) {
+    const connection = await node.app.connect(null);
+    const frame = { s: "priceService", stream: "price", scope: instrumentId };
+    expect(await emitWithAck(connection.socket, "qd:stream:sub", frame)).toEqual({
+      ok: true,
+      seed: [],
+    });
+    return connection;
+  }
+
+  it("are the sockets of every node, counted from either node", async () => {
+    const prefix = uniquePrefix("subscribers");
+    const nodes = [
+      await startNode(await create(), { services: [priceService] }, { prefix }),
+      await startNode(await create(), { services: [priceService] }, { prefix }),
+    ] as const;
+    running.push([...nodes]);
+    await watcher(nodes[0], "BTC");
+    const onB = await watcher(nodes[1], "BTC");
+    const [fromA, fromB] = nodes.map((node) => node.app.server.stream(prices, "price"));
+    expect(await fromA?.subscribers("BTC")).toBe(2);
+    expect(await fromB?.subscribers("BTC")).toBe(2);
+    expect(await fromA?.subscribers("ETH")).toBe(0);
+    onB.socket.disconnect();
+    await vi.waitFor(async () => {
+      expect(await fromA?.subscribers("BTC")).toBe(1);
+    });
+    expect(await fromB?.subscribers("BTC")).toBe(1);
+  });
+
+  it("count a node that does not answer within cluster.timeoutMs as 0, and say so once", async () => {
+    const prefix = uniquePrefix("subscribers");
+    const logger = captureLogger();
+    const asking = await startNode(
+      await create(),
+      { services: [priceService], logger, cluster: { timeoutMs: 200 } },
+      { prefix },
+    );
+    const silent = await startNode(await create(), { services: [priceService] }, { prefix });
+    running.push([asking, silent]);
+    await watcher(asking, "BTC");
+    await watcher(silent, "BTC");
+    // The node stops answering presence requests, as a stuck node would.
+    silent.app.server.io.removeAllListeners(PRESENCE_EVENT);
+    const price = asking.app.server.stream(prices, "price");
+    expect(await price.subscribers("BTC")).toBe(1);
+    expect(await price.subscribers("BTC")).toBe(1);
+    expect(
+      logger.at("warn").filter((entry) => entry.message.includes("subscriber count")),
+    ).toHaveLength(1);
   });
 });
 
