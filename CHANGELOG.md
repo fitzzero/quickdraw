@@ -282,22 +282,33 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   its key must. The README's collections example no longer gives its self
   list `requires`, a grant its methods do not ask for, so a member without
   a service grant opens it.
-- **`trackPrisma` returns `Tracked<C>`, a type the untracked client is
-  not.** The tracked client had the client's own type, so nothing told it
-  from the untracked one: a helper that writes could be handed the
-  untracked client, whose writes reach no subscriber, and lint could judge
-  a write only by its receiver's name. `Tracked<C>` is `C` with a mark, a
-  type only, with nothing at run time: still a `C` wherever one is asked
-  for, while the untracked client is no `Tracked<C>`. A helper typed
-  `client: Tracked<PrismaClient>` takes the tracked client and refuses the
-  untracked one at compile time. `TrackedTransaction<PrismaClient>` is the
-  type of `tx` in `db.$transaction(async (tx) => ...)`, a nested one's
-  too, and takes both `tx` and `db`, as does a kit callback's `db` (the
-  admin kit's `prepare`, say) annotated with it. `$transaction`'s array
-  form and options, the model delegates, what `$extends` added, a
-  handler's `db` and `initQuickdraw<{ db: typeof db }>` are unchanged, and
-  so is code that types the client `PrismaClient`. Both types are on
+- **Breaking for types: `trackPrisma` returns `Tracked<C>`, a type the
+  untracked client is not.** The tracked client had the client's own type,
+  so nothing told it from the untracked one: a helper that writes could be
+  handed the untracked client, whose writes reach no subscriber, and lint
+  could judge a write only by its receiver's name. `Tracked<C>` is `C` with
+  a mark, a type only, with nothing at run time: still a `C` wherever one
+  is asked for, while the untracked client is no `Tracked<C>`. A helper
+  typed `client: Tracked<PrismaClient>` takes the tracked client and
+  refuses the untracked one at compile time.
+  `TrackedTransaction<PrismaClient>` is the type of `tx` in
+  `db.$transaction(async (tx) => ...)`, a nested one's too, and takes both
+  `tx` and `db`, as does a kit callback's `db` (the admin kit's `prepare`,
+  say) annotated with it. `$transaction`'s array form and options, the
+  model delegates, what `$extends` added, a handler's `db` and
+  `initQuickdraw<{ db: typeof db }>` are unchanged. Both types are on
   `./prisma` and on the root export, for a shared package without Prisma.
+  On upgrade, a value typed `PrismaClient` no longer goes where
+  `typeof db` (a `Db` alias of it), `Tracked<PrismaClient>` or
+  `ReturnType<typeof trackPrisma>` is asked for. So these stop compiling
+  (TS2345 or TS2322, "Property '[TRACKED]' is missing"): a parameter typed
+  `PrismaClient` handed on to such a parameter, an app's own untracked test
+  client, and a fake (`{} as unknown as PrismaClient`,
+  `mockDeep<PrismaClient>()`). Nothing changes at run time. Type such
+  parameters `Db` (or `Tracked<PrismaClient>`), and test clients and fakes
+  as `Db` (`mockDeep<Db>()`). A `db` declared `PrismaClient` (a lazy
+  `Proxy`, say) carries no mark either: declare it `Tracked<PrismaClient>`
+  to pass it to a `TrackedTransaction` helper.
 - **A job can count a stream's subscribers.**
   `await qd.stream(contract, name).subscribers(scope)` (`subscribers()` for
   a global stream; also on `server.stream` and `dispatcher.stream`)
