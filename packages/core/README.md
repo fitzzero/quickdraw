@@ -1184,8 +1184,9 @@ export const taskService = qd.defineService(task, {
   collections: {
     // Read on the project opens its scope
     byProject: { anchor: projectContract },
-    // a user opens only the scope that is their id; its items still follow access above
-    assigned: { scopeAccess: "self" },
+    // a user opens only the scope that is their id, with the service's Read grant, as its
+    // methods ask for it; its items still follow access above
+    assigned: { scopeAccess: "self", requires: { service: "Read" } },
   },
   // opens the service topic to Read grants; closed without it
   watchAccess: { service: "Read" },
@@ -1222,6 +1223,17 @@ export const taskService = qd.defineService(task, {
   resumes the list after such a change reads a page. A change to a parent
   row's own access columns (a project's owner or access list) reaches the
   list only at the rows' next write or the list's next load.
+- `requires: { service: L }`, beside `anchor` or `scopeAccess` (`assigned`
+  above), also asks for a service-wide grant of at least `L` on the
+  collection's service, as its methods under `{ service: L }` do: both
+  checks must pass, and a service-wide `Admin` passes either. Without the
+  grant, `qd:col:sub` (cursor pages included), the scope's change topic and
+  a search kept to the scope are `FORBIDDEN`. The grant comes from the
+  socket's principal, never a read: when the user's grants reload below it
+  (`server.access.refresh`, a tracked write of the grants column, on any
+  node), each of their sockets leaves the scope with `qd:revoked`
+  (`reason: "access"`) and gets nothing more of it. A collection without
+  `requires` is unchanged.
 - Items are visible to everyone in an anchored scope: no per-row policy or
   field tier applies inside it. Derive the item service's own access from
   the anchor (`inherit` from it, as above): a per-row policy on the item

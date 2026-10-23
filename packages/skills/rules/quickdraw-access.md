@@ -265,6 +265,12 @@ channel `requires`.
   item service `inherit` from the anchor, or use separate scopes. A self
   scope (`scopeAccess: "self"`) is the exception: its items follow the item
   service's policy, so its user gets only the rows they may read.
+- A list whose methods need a service-wide grant (`{ service: "Read" }`)
+  needs it too: `requires: { service: "Read" }` beside its `anchor` or
+  `scopeAccess`, in `defineService`'s `collections`. Both checks apply (a
+  service-wide `Admin` passes either), a scope without the grant is
+  `FORBIDDEN`, and a reload of the user's grants below it revokes the scope
+  on their sockets. Without it a self list opens for any signed-in user.
 - A hand-written method that reads many rows authorizes the parent
   (`{ scope: "Read", of: project, id: "projectId" }`) and filters by it, or
   uses the read/write kit's `list` or a collection, which filter by policy.
