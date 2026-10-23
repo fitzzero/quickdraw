@@ -3,7 +3,8 @@
 // tests' board. It counts levels as the forms do: `can` agrees with an
 // `{ entry }` form for a member, a non-member and a service-wide `Admin`; a
 // `custom` form checks a parent row with it, or a row its key names only
-// sometimes; `where` filters exactly the rows `can` allows; an anonymous
+// sometimes (the list it lets through without one kept to the policy by
+// `where`); `where` filters exactly the rows `can` allows; an anonymous
 // caller has no level anywhere; MCP calls and `ctx.services` calls ask as
 // their own caller; and a context no dispatcher built refuses it.
 //
@@ -55,6 +56,7 @@ const tasks = defineContract("taskService", {
       output: "entity",
     }),
     // a key that is optional: Read on the project when it names one, else the caller's own tasks
+    // that they may read
     assigned: query({
       input: z.object({ projectId: z.string().optional() }),
       output: listOf("entity"),
@@ -121,12 +123,18 @@ const taskService = qd.defineService(tasks, {
           input.projectId === undefined ||
           (await ctx.access.can(projects, input.projectId, "Read")),
       ),
-      handler: ({ input, ctx, db }) =>
-        db.task.findMany({
-          where: { assigneeId: ctx.principal.userId, projectId: input.projectId },
+      // the form lets a list without its key through: the rows still follow the policy
+      handler: async ({ input, ctx, db }) => {
+        const readable = await ctx.access.where(tasks, "Read");
+        if (readable === "none") return [];
+        return await db.task.findMany({
+          where: {
+            AND: [{ assigneeId: ctx.principal.userId, projectId: input.projectId }, readable],
+          },
           orderBy: { id: "asc" },
           take: 100,
-        }),
+        });
+      },
     },
     relay: {
       access: "authenticated",
@@ -250,19 +258,37 @@ describe("ctx.access", () => {
     expect(await h.prisma.task.count({ where: { title: "Planned" } })).toBe(1);
   });
 
-  it("checks a row only when its optional key is present", async () => {
+  it("checks a row only when its optional key is present, and lists only rows the policy allows", async () => {
     const app = await start();
     await h.prisma.task.updateMany({ data: { assigneeId: board.cy } });
     const cy = app.as(as(board.cy)).taskService;
-    // Without the key the form passes, and the handler lists cy's own tasks.
-    expect(sorted((await cy.assigned({})).map((task) => task.id))).toEqual(
-      sorted([board.t1, board.t2]),
-    );
+    // Without the key the form passes, and the handler lists cy's own tasks that she may read:
+    // T1 in P1, where she is a member, and not T2 in P2, where she has no level.
+    expect(await cy.assigned({})).toEqual([expect.objectContaining({ id: board.t1 })]);
     // With it, the form asks the policy about that project.
     expect(await cy.assigned({ projectId: board.p1 })).toEqual([
       expect.objectContaining({ id: board.t1 }),
     ]);
     await expect(cy.assigned({ projectId: board.p2 })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    // bo reads P1 and P3: a list with a project holds that project's tasks alone.
+    const [t4] = await Promise.all([
+      h.prisma.task.create({ data: { projectId: board.p1, title: "T4", assigneeId: board.bo } }),
+      h.prisma.task.create({ data: { projectId: board.p3, title: "T3", assigneeId: board.bo } }),
+    ]);
+    expect(await app.as(as(board.bo)).taskService.assigned({ projectId: board.p1 })).toEqual([
+      expect.objectContaining({ id: t4.id }),
+    ]);
+    // A service-wide Admin of the tasks reads every row: both of their own.
+    const admin = app.as(as(board.cy, { taskService: "Admin" })).taskService;
+    expect(sorted((await admin.assigned({})).map((task) => task.id))).toEqual(
+      sorted([board.t1, board.t2]),
+    );
+    // Removed from P1, cy lists none of the tasks still assigned to her there.
+    await h.prisma.projectMember.deleteMany({ where: { projectId: board.p1, userId: board.cy } });
+    expect(await cy.assigned({})).toEqual([]);
+    await expect(cy.assigned({ projectId: board.p1 })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
   });

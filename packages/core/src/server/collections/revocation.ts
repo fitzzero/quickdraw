@@ -14,7 +14,9 @@
 //
 // A changed `serviceAccess` re-authorizes every scope of the user's sockets
 // (a collection that `requires` a grant above the new one is revoked so),
-// before the user's self scopes are reset, so a revoked one gets no reset.
+// before the user's self scopes are reset, so a revoked one gets no reset;
+// their resume floors go up before it, so a client resuming one while the
+// re-authorization reads gets a page.
 // A self scope has no anchors, since its user may always open it; when its
 // items follow its service's policy, the same changes re-check them
 // (`selfRecheck.ts`: a lost row is `removed`, or the scope resets, and a
@@ -29,7 +31,7 @@ import type { QuickdrawServerSocket } from "../transports/types";
 import { authorizeScopes } from "./access";
 import type { BoundCollection, CollectionHub } from "./bind";
 import { roomOf, type ScopeSubscription } from "./scopes";
-import { recheckSelf, resetSelf } from "./selfRecheck";
+import { raiseSelfFloors, recheckSelf, resetSelf } from "./selfRecheck";
 
 type Found = ReadonlyMap<QuickdrawServerSocket, readonly ScopeSubscription[]>;
 
@@ -124,6 +126,8 @@ export function createScopeRevocation(hub: CollectionHub): RevocationHook {
       ]);
     },
     regranted: async (sockets, userId) => {
+      // Before the reads below: a self scope resumed meanwhile reads a page, filtered anew.
+      raiseSelfFloors(hub, userId);
       const found = new Map(
         sockets.map((socket) => [socket, hub.collections.scopes.entries(socket)]),
       );

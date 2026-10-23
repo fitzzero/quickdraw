@@ -20,12 +20,14 @@
 // | grants reloaded              | that user's self scopes: `reset`                                 |
 //
 // Every change the table re-checks also raises the resume floor of the
-// scopes it concerns (the user's scope, or every scope of the collection),
-// whether or not anyone subscribes to them here: a client that closed the
-// list, or was offline, and resumes it later then reads a filtered page
-// instead of keeping the rows it lost. Frames go to this process's sockets
-// only: a broadcast change reaches every node, and each re-checks its own.
-// None of it throws: a lookup that fails is logged and its scope reset.
+// scopes it concerns (the user's scope, or every scope of the collection)
+// past every revision taken so far, whether or not anyone subscribes to
+// them here: a client that closed the list, or was offline, and resumes it
+// later then reads a filtered page instead of keeping the rows it lost. A
+// reload of grants raises it before it authorizes the user's scopes again.
+// Frames go to this process's sockets only: a broadcast change reaches
+// every node, and each re-checks its own. None of it throws: a lookup that
+// fails is logged and its scope reset.
 
 import type { AccessChange } from "../access/changes";
 import { meetsLevel } from "../access/levels";
@@ -89,8 +91,10 @@ function policyServices(
 
 /**
  * Makes a resume of the scopes a change concerns read a page: the scope of
- * `userId`, or every scope of the collection. A scope nobody here
- * subscribes to gets no frame of the change.
+ * `userId`, or every scope of the collection. Either floor goes past every
+ * revision taken so far, so a client whose page is at the current one
+ * (nothing written since) reads again too. A scope nobody here subscribes
+ * to gets no frame of the change.
  */
 function raiseFloor(hub: CollectionHub, collection: BoundCollection, userId?: string): void {
   const s = collection.service.name;
@@ -98,7 +102,8 @@ function raiseFloor(hub: CollectionHub, collection: BoundCollection, userId?: st
     hub.collections.buffer.skipAll(groupOf(s, collection.name));
     return;
   }
-  hub.collections.buffer.skip(roomOf({ s, c: collection.name, scope: userId }), currentRev());
+  // `reset`, not `skip`: the floor goes one past, and no revision nobody took is recorded.
+  hub.collections.buffer.reset(roomOf({ s, c: collection.name, scope: userId }), currentRev());
 }
 
 function logFailure(hub: CollectionHub, collection: BoundCollection, error: unknown): void {
@@ -208,6 +213,13 @@ export async function recheckSelf(hub: CollectionHub, change: AccessChange): Pro
   await Promise.all(work);
 }
 
+/** Makes a resume of every self scope of `userId` read a page: their grants are reloading. */
+export function raiseSelfFloors(hub: CollectionHub, userId: string): void {
+  for (const collection of selfCollections(hub)) {
+    raiseFloor(hub, collection, userId);
+  }
+}
+
 /**
  * A reload of `userId`'s grants: raises the resume floor of every self
  * scope of that user, and sends `reset` to the self scopes the user's
@@ -218,8 +230,8 @@ export async function resetSelf(
   sockets: readonly QuickdrawServerSocket[],
   userId?: string,
 ): Promise<void> {
-  for (const collection of userId === undefined ? [] : selfCollections(hub)) {
-    raiseFloor(hub, collection, userId);
+  if (userId !== undefined) {
+    raiseSelfFloors(hub, userId);
   }
   const { io } = hub;
   if (io === undefined) {

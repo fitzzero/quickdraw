@@ -12,7 +12,7 @@ import { SERVER_EVENTS } from "../../contract/names";
 import { isRecord } from "../../protocol/guards";
 import { isRoomName, isSocketId } from "../../protocol/peer";
 import type { QuickdrawConnection } from "../connection";
-import { throwLater } from "../peer/core";
+import { notifyEach } from "../watch";
 
 /** Hears a room's host change: its socket id, or `null` when the room has none now. */
 export type HostListener = (room: string, host: string | null) => void;
@@ -39,13 +39,9 @@ function createDirectory(connection: QuickdrawConnection): HostDirectory {
     } else {
       rooms.set(room, host);
     }
-    for (const listener of [...listeners]) {
-      try {
-        listener(room, host);
-      } catch (error) {
-        throwLater(error);
-      }
-    }
+    notifyEach(listeners, (listener) => {
+      listener(room, host);
+    });
   };
   const { socket } = connection;
   socket.on(SERVER_EVENTS.host, (frame: unknown) => {

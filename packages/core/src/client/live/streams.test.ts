@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostMessage } from "../../protocol/envelope";
 import { MAX_SCOPE_LENGTH } from "../../protocol/version";
 import { registerLocalHost } from "../host/links";
+import { createLocalLink } from "../host/local";
 import { controlOf, type LinkControl } from "../peer/core";
 import { fakeConnection, testQueryClient } from "./__tests__/fakeSocket";
 import { liveDataOf } from "./liveData";
@@ -33,12 +34,17 @@ function hosted() {
   const live = liveDataOf(fake.connection, testQueryClient());
   const heard: HostMessage[] = [];
   let host: LinkControl | undefined;
-  registerLocalHost(fake.connection, ROOM, (link) => {
-    host = controlOf(link);
-    host?.on((message) => {
-      heard.push(message);
-    });
-  });
+  registerLocalHost(
+    fake.connection,
+    ROOM,
+    (link) => {
+      host = controlOf(link);
+      host?.on((message) => {
+        heard.push(message);
+      });
+    },
+    { createLink: createLocalLink, controlOf },
+  );
   fake.deliver("qd:host", [ROOM, "socket-ada"]);
   const send = (message: HostMessage): void => {
     host?.send("rel", message);
