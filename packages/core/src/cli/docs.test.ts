@@ -419,33 +419,40 @@ describe("quickdraw-docs --services (finding F5.3)", () => {
     });
   });
 
-  it("says to build the workspace when a package the services import has no build yet (finding F6.7)", () => {
-    // A workspace package whose package.json points at its build, not built yet.
-    const dir = tempDir();
-    const pkg = join(dir, "node_modules", "@project", "db");
-    mkdirSync(pkg, { recursive: true });
-    writeFileSync(
-      join(pkg, "package.json"),
-      JSON.stringify({ name: "@project/db", type: "module", exports: "./dist/index.js" }),
-    );
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }));
-    const services = join(dir, "services.ts");
-    writeFileSync(services, 'import { db } from "@project/db";\nexport const all = [db];\n');
-    // Node's own loader, as the command runs (vitest resolves imports its own way).
-    const cli = fileURLToPath(new URL("./quickdraw-docs.ts", import.meta.url));
-    const tsx = fileURLToPath(new URL("../../node_modules/.bin/tsx", import.meta.url));
-    const contracts = fileURLToPath(new URL("./__tests__/accessApp.ts", import.meta.url));
-    const result = spawnSync(tsx, [cli, contracts, "--services", services, "--out", tempDir()], {
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "A workspace package it imports loads from its build, which is missing: build the workspace (bun run build) before generating the docs",
-    );
-    // Anything else that failed is reported as it was.
-    const other = new Error("DATABASE_URL is not set");
-    expect(buildHint(other, services, dir)).toBe(other);
-  });
+  // It spawns tsx, which compiles on a cold runner: past vitest's 5 s on a loaded one (PR #123).
+  it(
+    "says to build the workspace when a package the services import has no build yet (finding F6.7)",
+    { timeout: 30_000 },
+    () => {
+      // A workspace package whose package.json points at its build, not built yet.
+      const dir = tempDir();
+      const pkg = join(dir, "node_modules", "@project", "db");
+      mkdirSync(pkg, { recursive: true });
+      writeFileSync(
+        join(pkg, "package.json"),
+        JSON.stringify({ name: "@project/db", type: "module", exports: "./dist/index.js" }),
+      );
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }));
+      const services = join(dir, "services.ts");
+      writeFileSync(services, 'import { db } from "@project/db";\nexport const all = [db];\n');
+      // Node's own loader, as the command runs (vitest resolves imports its own way).
+      const cli = fileURLToPath(new URL("./quickdraw-docs.ts", import.meta.url));
+      const tsx = fileURLToPath(new URL("../../node_modules/.bin/tsx", import.meta.url));
+      const contracts = fileURLToPath(new URL("./__tests__/accessApp.ts", import.meta.url));
+      const result = spawnSync(tsx, [cli, contracts, "--services", services, "--out", tempDir()], {
+        encoding: "utf8",
+        // A child that hangs fails the test rather than blocking the worker.
+        timeout: 25_000,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "A workspace package it imports loads from its build, which is missing: build the workspace (bun run build) before generating the docs",
+      );
+      // Anything else that failed is reported as it was.
+      const other = new Error("DATABASE_URL is not set");
+      expect(buildHint(other, services, dir)).toBe(other);
+    },
+  );
 
   it("refuses a service no contract documents, and two services of one name", () => {
     const services = servicesOf(accessApp);
