@@ -130,8 +130,11 @@ function isReference(identifier: Node): boolean {
     Node.isJsxAttribute(parent) ||
     Node.isBindingElement(parent)
   ) {
+    // In `{ key: name = fallback }` only `key` names a property: a default (`{ a = LIMIT }`,
+    // `[b = LIMIT]`) is a reference, and the binding's own name counts as one, conservatively.
+    // A shorthand element (`{ a }`) has no property name, so every child of it counts.
     return Node.isBindingElement(parent)
-      ? parent.getNameNode() === identifier
+      ? parent.getPropertyNameNode() !== identifier
       : parent.getNameNode() !== identifier;
   }
   return true;
