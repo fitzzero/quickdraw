@@ -1804,22 +1804,46 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `optimistic: (input, cache) => ...` writes its own layers with
   `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
   `addItem` and `addEntity` (below).
+- A mutation hook's call is bound, as it is made, to the user it is made as
+  and to the credentials it is made under, and each attempt is checked
+  before it goes out: one whose user changed first (`setAuth` in the same
+  handler, an async `onMutate`, a pause while offline, a `scope` queue, a
+  retry, a cookie that names someone else after a reconnect) fails
+  `CANCELLED`, is not sent as the next user, and is not retried. An attempt
+  that starts while new credentials await their hello is refused the same
+  way, even for the same user's refreshed token (it is not held until the
+  hello); one that starts once that hello names the call's user is sent. A
+  call made after the server ended the session is sent only if the next
+  hello comes under the same credentials (a cookie that signs in again)
+  and names that session's user; new credentials (`setAuth`) refuse it,
+  even for that user. A refused item's `retry()` sends
+  again as the user who made the call, and when this check stops it the
+  item shows in `refused` again, with the `CANCELLED`. Three cases are not
+  covered yet, each at a reconnect whose credentials (a cookie) now name
+  another user: `qd.<service>.<method>.call()`, which emits at once; a hook
+  call already waiting in Socket.IO's send buffer; and an attempt that
+  starts between the reconnect's connect and its hello, which is checked
+  against the last hello (a drop keeps it). Each goes out as whoever the
+  new socket speaks for.
 - A mutation hook shows a call (its `data`, `error`, `variables` and
-  status) only while the server's hello names the user the call ran as. A
-  component that stays mounted while the user changes shows the next user
-  none of the last user's calls, finished or in flight, and none while new
-  credentials await their hello; the same user's shows again once their
-  hello arrives, and stays through a reconnect. `throwOnError` throws only
-  such an error. The call still settles, and its callbacks still run, for
-  the user who made it. A call made while no hello is held (before the
-  first, while new credentials await theirs, after the server ended the
-  session) runs as the user the next hello names, and shows idle
-  (`isPending` false) until then; one that fails before any hello (no
-  socket to send it on) is never shown nor thrown, so handle such failures
-  in `onError`. Under an `AuthGate` (children render only while `isKnown`)
-  such calls do not arise. A call that itself switches the user (an
-  anonymous sign-in or sign-up, then `setAuth`) hides its result once the
-  new hello arrives: act on it in `onSuccess`.
+  status) only to the user it is made as, while the server's hello names
+  them. A component that stays mounted while the user changes shows the
+  next user none of the last user's calls, finished or in flight, and none
+  while new credentials await their hello; the same user's shows again
+  once their hello arrives, and stays through a reconnect. `throwOnError`
+  throws only such an error. The call still settles, and its callbacks
+  still run, for the user who made it. A call made while no hello is held
+  (before the first, while new credentials await theirs, after the server
+  ended the session) becomes the call of the user the next hello under the
+  same credentials names, even once it settled (after a session the server
+  ended, only if it names that session's user again). It shows, pending
+  and then its answer or error, while no hello is held under the same
+  credentials, and once one is, only to that user: one the hello did not
+  make anyone's (another user's cookie after the session ended) shows to
+  nobody. New credentials hide it. A
+  call that itself switches the user (an anonymous sign-in or sign-up,
+  then `setAuth`) hides its result once the new hello arrives: act on it
+  in `onSuccess`.
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches
@@ -1856,7 +1880,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
   `useCollection` and a search's held scope show nothing of another row,
   scope or user while a new id, scope or user loads. A mounted mutation
-  hook shows the next user none of the last user's calls (above).
+  hook shows the next user none of the last user's calls, nor sends them as
+  the next user, but for the three reconnect cases above.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.

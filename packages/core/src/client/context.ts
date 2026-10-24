@@ -21,6 +21,7 @@ import { createContext, useContext, useSyncExternalStore } from "react";
 import type { HelloFrame } from "../protocol/version";
 import {
   INITIAL_CONNECTION_STATE,
+  credentialsEpochOf,
   type ConnectionState,
   type QuickdrawConnection,
 } from "./connection";
@@ -74,6 +75,18 @@ export function serverStateOf(connection: QuickdrawConnection): ConnectionState 
 export function useConnectionState(connection: QuickdrawConnection): ConnectionState {
   const onServer = (): ConnectionState => serverStateOf(connection);
   return useSyncExternalStore(connection.subscribe, connection.getState, onServer);
+}
+
+/**
+ * The connection's credentials epoch (`credentialsEpochOf`), re-rendering
+ * when it changes; `0` on a server and while hydrating, before any call.
+ */
+export function useCredentialsEpoch(connection: QuickdrawConnection): number {
+  return useSyncExternalStore(
+    connection.subscribe,
+    () => credentialsEpochOf(connection),
+    () => 0,
+  );
 }
 
 /**

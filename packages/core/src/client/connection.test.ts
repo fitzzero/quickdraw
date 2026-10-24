@@ -14,6 +14,8 @@ import { captureLogger, tick } from "../server/__tests__/fixtures";
 import { callData } from "./call";
 import {
   createQuickdrawConnection,
+  credentialsEpochOf,
+  endedSessionOf,
   isServerDisconnect,
   isSessionRefusal,
   type ConnectionState,
@@ -208,6 +210,8 @@ describe("createQuickdrawConnection", () => {
       socket.conn.close();
     }
     await until(() => connection.getState().reconnecting);
+    // A dropped transport keeps the credentials epoch; the refused session moves it on.
+    expect(credentialsEpochOf(connection)).toBe(0);
     const pending = callData(connection, echo);
     await whenStatus(connection, "refused");
     expect(connection.getState()).toMatchObject({
@@ -215,7 +219,14 @@ describe("createQuickdrawConnection", () => {
       serviceAccess: null,
       refusal: { code: "UNAUTHENTICATED" },
     });
+    expect(credentialsEpochOf(connection)).toBe(1);
+    // The hello held through the drop says whose session the refusal ended.
+    expect(endedSessionOf(connection)?.hello?.userId).toBe(alice.userId);
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    // Refused again with no hello between: the session ended is still Alice's.
+    connection.open();
+    await until(() => credentialsEpochOf(connection) === 2);
+    expect(endedSessionOf(connection)?.hello?.userId).toBe(alice.userId);
   });
 
   it("keeps the user through reconnects refused with INTERNAL, and connects again by itself", async () => {
@@ -244,6 +255,8 @@ describe("createQuickdrawConnection", () => {
       expect(state).toMatchObject({ reconnecting: true, refusal: null });
     }
     expect(reconnected).toHaveBeenCalledTimes(1);
+    // The server could not check the credentials: the session stood, and the epoch with it.
+    expect(credentialsEpochOf(connection)).toBe(0);
   });
 
   it("connects by itself once the server can authenticate a first connect it refused with INTERNAL", async () => {
@@ -340,6 +353,40 @@ describe("createQuickdrawConnection", () => {
     ]) {
       expect(isSessionRefusal(data)).toBe(false);
     }
+  });
+
+  it("counts other credentials and a session the server ends in its epoch, nothing else", async () => {
+    const { app } = await harness.start();
+    const connection = await harness.connect(app.url, { auth: { principal: alice } });
+    await until(() => connection.getState().hello?.userId === alice.userId);
+    expect(credentialsEpochOf(connection)).toBe(0);
+    // A dropped transport, the app's close and open, and the same credentials again keep it.
+    for (const socket of app.server.io.sockets.sockets.values()) {
+      socket.conn.close();
+    }
+    await until(() => connection.getState().reconnecting);
+    await whenStatus(connection, "connected");
+    connection.close();
+    connection.open();
+    await whenStatus(connection, "connected");
+    expect(connection.setAuth({ principal: alice })).toBe(false);
+    expect(credentialsEpochOf(connection)).toBe(0);
+    expect(endedSessionOf(connection)).toBeUndefined();
+    // Other credentials move it on at once, and so does the server ending the session.
+    connection.setAuth({ principal: bob });
+    expect(credentialsEpochOf(connection)).toBe(1);
+    await until(() => connection.getState().hello?.userId === bob.userId);
+    app.server.access.disconnectUser(bob.userId);
+    await whenStatus(connection, "disconnected");
+    expect(credentialsEpochOf(connection)).toBe(2);
+    // That epoch keeps whose session it was, until other credentials begin the next.
+    expect(endedSessionOf(connection)?.hello?.userId).toBe(bob.userId);
+    connection.setAuth({ principal: alice });
+    expect(credentialsEpochOf(connection)).toBe(3);
+    expect(endedSessionOf(connection)).toBeUndefined();
+    // A connection made elsewhere (a mock's) has none.
+    expect(credentialsEpochOf({} as QuickdrawConnection)).toBe(0);
+    expect(endedSessionOf({} as QuickdrawConnection)).toBeUndefined();
   });
 
   it("reconnects with new credentials, and only when they change", async () => {
