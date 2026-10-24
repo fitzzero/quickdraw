@@ -14,14 +14,17 @@
 //   new input (compared by value, as query keys are). A failure shows as
 //   `error` until the next hello; `RATE_LIMITED` is tried again once its
 //   backoff ends.
-// - `status` is the current socket's: `"idle"` while there is none to join
-//   with (before the first hello, while reconnecting) or `enabled` is false,
-//   `"joining"` while the call runs, then `"joined"` or `"error"`. `data` is
-//   what the last successful call returned, kept through a reconnect: it
-//   belongs to the user whose hello the join ran under (`userOf`, anonymous
-//   included), and shows only while the connection's hello names that user.
-//   New credentials hide it until their hello, and the next user's joins
-//   start from nothing.
+// - `status` is the current socket's and the current input's: `"idle"` while
+//   there is no socket to join with (before the first hello, while
+//   reconnecting) or `enabled` is false, `"joining"` while the call runs (a
+//   new input joins from its first render), then `"joined"` or `"error"`.
+//   `data` is what the last successful call returned, kept through a
+//   reconnect: it belongs to the user whose hello the join ran under
+//   (`userOf`, anonymous included) and to the input it ran with (by value,
+//   as the re-join compares it), and shows only for both: while the
+//   connection's hello names that user, and the hook joins that input. New
+//   credentials hide it until their hello, the next user's joins start from
+//   nothing, and so do a new input's.
 // - `retry()` runs the call again at once on the current socket, for a
 //   join that was refused (finding F6.3 of the quickdraw-chat migration: a
 //   refused first join could be retried only by toggling `enabled`). It
@@ -78,22 +81,24 @@ export interface UseJoinOptions<Output> {
 /** What {@link useJoin} returns. */
 export interface UseJoinResult<Output> {
   /**
-   * The current socket's join: `"idle"` while there is no socket to join
-   * with (before the first hello, while reconnecting) or `enabled` is false,
-   * `"joining"` while the call runs, `"joined"` once it succeeded, `"error"`
-   * when it failed (see `error`).
+   * The current socket's join of the current input: `"idle"` while there is
+   * no socket to join with (before the first hello, while reconnecting) or
+   * `enabled` is false, `"joining"` while the call runs (from the first
+   * render of a new input), `"joined"` once it succeeded, `"error"` when it
+   * failed (see `error`).
    */
   readonly status: JoinStatus;
   /** `status === "joined"`. */
   readonly isJoined: boolean;
   /**
    * What the last successful call returned, on this socket or an earlier
-   * one, for the user the connection acts for: shown only while its hello
-   * names the user the call ran as, so never to another user, nor while new
-   * credentials await their hello.
+   * one, for the user the connection acts for and the input the hook joins
+   * now: shown only while its hello names the user the call ran as, and
+   * only for the input it ran with (by value), so never to another user,
+   * nor while new credentials await their hello, nor for another input.
    */
   readonly data: Output | undefined;
-  /** Why the call failed on the current socket; `null` otherwise. */
+  /** Why the call of the current input failed on the current socket; `null` otherwise. */
   readonly error: QuickdrawError | null;
   /**
    * Runs the call again now on the current socket: after a refusal the user
@@ -104,11 +109,13 @@ export interface UseJoinResult<Output> {
   readonly retry: () => void;
 }
 
-/** The last join: the socket and the user it ran as, and how it went. */
+/** The last join: the socket, the user it ran as and the input it ran with, and how it went. */
 interface JoinState<Output> {
   readonly socketId: string | undefined;
   /** The user the hello it ran under names (`null`: anonymous), whose `data` it holds. */
   readonly userId: string | null;
+  /** The key of the input it ran with (`hashKey([input])`), whose `data` it holds. */
+  readonly key: string;
   readonly status: Exclude<JoinStatus, "idle">;
   readonly data: Output | undefined;
   readonly error: QuickdrawError | null;
@@ -136,6 +143,7 @@ function startJoins<Input, Output>(
   member: JoinMember<Input, Output>,
   latest: { readonly current: Latest<Input, Output> },
   setState: Dispatch<SetStateAction<JoinState<Output> | undefined>>,
+  key: string,
 ): { readonly join: () => void; readonly stop: () => void } {
   let attempt = 0;
   let stopped = false;
@@ -151,12 +159,13 @@ function startJoins<Input, Output>(
     const userId = userOf(hello);
     const current = (): boolean =>
       !stopped && mine === attempt && connection.getState().hello === hello;
-    // What the last join returned stays only for the same user: never another's.
+    // What the last join returned stays only for the same user and input: never another's.
     const kept = (previous: JoinState<Output> | undefined): Output | undefined =>
-      previous?.userId === userId ? previous.data : undefined;
+      previous?.userId === userId && previous.key === key ? previous.data : undefined;
     setState((previous) => ({
       socketId,
       userId,
+      key,
       status: "joining",
       data: kept(previous),
       error: null,
@@ -164,7 +173,7 @@ function startJoins<Input, Output>(
     member.call(latest.current.input).then(
       (data) => {
         if (current()) {
-          setState({ socketId, userId, status: "joined", data, error: null });
+          setState({ socketId, userId, key, status: "joined", data, error: null });
           latest.current.onJoined?.(data);
         }
       },
@@ -176,6 +185,7 @@ function startJoins<Input, Output>(
         setState((previous) => ({
           socketId,
           userId,
+          key,
           status: "error",
           data: kept(previous),
           error: failure,
@@ -237,7 +247,7 @@ export function useJoin<Input, Output>(
     if (!enabled) {
       return undefined;
     }
-    const joins = startJoins(connection, member, latest, setState);
+    const joins = startJoins(connection, member, latest, setState, key);
     running.current = joins.join;
     return () => {
       joins.stop();
@@ -252,16 +262,19 @@ export function useJoin<Input, Output>(
       running.current?.();
     }
   }, [connection]);
-  const shown =
-    enabled && connected && state !== undefined && state.socketId === connection.socket.id
-      ? state
-      : undefined;
-  const status = shown?.status ?? "idle";
+  // The last join is the current input's, or another's: this render's effect joins the new one.
+  const ofInput = state?.key === key ? state : undefined;
+  const onSocket =
+    enabled && connected && state !== undefined && state.socketId === connection.socket.id;
+  const shown = onSocket ? ofInput : undefined;
+  // A new input on this socket joins from its first render, with nothing of the last one's.
+  const status = onSocket ? (shown?.status ?? "joining") : "idle";
   const error = shown?.error ?? null;
-  // Only to the user it ran as, while a hello names them: never while new credentials await theirs.
+  // Only to the user it ran as, while a hello names them, and for the input it ran with: never
+  // while new credentials await their hello, nor for another input.
   const data =
-    connectionState.hello !== null && userOf(connectionState.hello) === state?.userId
-      ? state.data
+    connectionState.hello !== null && userOf(connectionState.hello) === ofInput?.userId
+      ? ofInput.data
       : undefined;
   return useMemo(
     () => ({ status, isJoined: status === "joined", data, error, retry }),

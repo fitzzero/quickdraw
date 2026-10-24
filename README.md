@@ -3137,8 +3137,10 @@ input, { enabled?, onJoined? })` (from `./client`) runs the joining call
   (`enterBoard` above) on every `qd:hello` and when its input changes by
   value, never on a re-render, and shows `status` (`idle` with no socket to
   join with, `joining`, `joined`, `error`), `isJoined`, `data` (what the
-  last join returned, to the user it ran as only: hidden while new
-  credentials await their hello, and never the next user's) and `error`;
+  last join returned, to the user it ran as and for the input it ran with
+  only: hidden while new credentials await their hello, never the next
+  user's, and never another input's, so a new input shows `joining` with
+  no `data` from its first render until its own answer) and `error`;
   a refusal stands until the next hello or `retry()` (which runs the call
   again at once on the current socket, and does nothing while there is
   none or `enabled` is false), `RATE_LIMITED` is tried again after its
