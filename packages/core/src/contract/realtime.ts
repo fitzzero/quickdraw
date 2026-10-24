@@ -104,7 +104,13 @@ export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
    * each process, and sends a new subscriber first. Default 0; at most 1,000.
    */
   readonly seed?: number;
-  /** Send items volatile: dropped for a client whose connection is backed up. Default `false`. */
+  /**
+   * Send items volatile: an item is dropped for a socket while its
+   * connection is backed up (64 relay messages and volatile frames sent to
+   * it waiting), never queued, and never only because another frame went to
+   * it in the same tick. More than 64 items to one socket in one tick drop
+   * the rest: push a snapshot instead of a burst that big. Default `false`.
+   */
   readonly volatile?: boolean;
   /** Who may subscribe. Without it the stream is closed. */
   readonly access?: StreamAccess;

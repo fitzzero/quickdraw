@@ -45,7 +45,7 @@ export type StreamMember<C extends AnyContract, K extends StreamName<C>> =
 
 /** `qd.<key>.<channel>`. */
 export interface ChannelMember<C extends AnyContract, K extends ChannelName<C>> {
-  /** Sends on the channel, volatile and unanswered: `{ send, isReady }`. */
+  /** Sends on the channel, unanswered, dropping a message while the connection is backed up: `{ send, isReady }`. */
   useChannel(): UseChannelResult<ChannelInputOf<C, K>>;
 }
 

@@ -23,12 +23,10 @@ import type {
   PeerLabel,
   PeerSignal,
 } from "../../protocol/envelope";
+import { FAST_BACKLOG_BYTES } from "../../protocol/version";
 
 /** How long ICE may stay `disconnected` before the direct path counts as failed. */
 export const DISCONNECTED_GRACE_MS = 5000;
-
-/** A `fast` message is dropped while its channel holds more than this many bytes unsent. */
-export const FAST_BACKLOG_BYTES = 32_768;
 
 /** Candidates kept for a remote description not set yet. */
 const MAX_EARLY_CANDIDATES = 64;

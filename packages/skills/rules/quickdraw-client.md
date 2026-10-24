@@ -179,9 +179,12 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 ## Realtime
 
 - Channels: `const { send, isReady } = qd.task.cursor.useChannel();` sends
-  fire-and-forget messages (dropped over the channel's rate). A channel that
-  `requires` a room takes messages only from a socket a method joined to it:
-  the client that sends must make the joining call itself.
+  fire-and-forget messages, dropped over the channel's rate and while the
+  connection is backed up (64 packets, or more than 32 KiB, waiting), never
+  for going out in the same tick as another: a burst of input arrives
+  whole. A channel that `requires` a room takes messages only from a socket
+  a method joined to it: the client that sends must make the joining call
+  itself.
 - Events: `qd.task.cursorMoved.useEvent((payload) => ...)` hears the
   contract's events sent to a room the socket is in. An event that carries
   a query's new result writes it into the cache with

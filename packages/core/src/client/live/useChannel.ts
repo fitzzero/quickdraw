@@ -2,11 +2,14 @@
 
 // `qd.<service>.<channel>.useChannel()` (RFC 0003 section 12.5): fast
 // one-way input such as cursors or typing. `send(payload)` emits `qd:ch
-// [service, channel, payload]` volatile: when the connection is backed up
-// the message is dropped rather than queued, which is what input superseded
-// by the next message wants. There is no answer; the server drops a message
-// over its rate, with an invalid payload or without access, silently. Ported
-// from 4.1's `useChannelSend` (4.1 `src/client/useChannelSend.ts:36`).
+// [service, channel, payload]`; while the way to the server is backed up
+// (`../backlog.ts`: 64 packets, or more than 32 KiB, waiting) the message is
+// dropped rather than queued, which is what input superseded by the next
+// message wants. Never for a write in flight, as Socket.IO's volatile flag
+// drops one: of the messages sent in one tick it kept only the first. There
+// is no answer; the server drops a message over its rate, with an invalid
+// payload or without access, silently. Ported from 4.1's `useChannelSend`
+// (4.1 `src/client/useChannelSend.ts:36`).
 //
 // A message is dropped, too, until the socket's own `qd:hello` has arrived:
 // a reconnect's socket may speak for someone else (a session cookie that
@@ -24,6 +27,7 @@
 import { useCallback, useMemo } from "react";
 import { CLIENT_EVENTS } from "../../contract/names";
 import { isHostServed, type ChannelDef } from "../../contract/realtime";
+import { backedUp } from "../backlog";
 import { callHoldOf, type QuickdrawConnection } from "../connection";
 import { useConnectionState, useQuickdrawContext } from "../context";
 import { hostsOf } from "../host/hosts";
@@ -35,7 +39,8 @@ export interface UseChannelResult<Payload> {
   /**
    * Sends one message; does nothing while the socket is not connected, or
    * its own hello has not arrived yet (a reconnect's socket may speak for
-   * another user). Stable across renders.
+   * another user), or while the connection is backed up. Stable across
+   * renders.
    */
   send(payload: Payload): void;
   /** True while the socket is connected and the server has said hello on that socket. */
@@ -69,7 +74,11 @@ export function useChannel<Payload>(
         }
         return;
       }
-      socket.volatile.emit(CLIENT_EVENTS.channel, [service, channel, payload]);
+      // Dropped, never queued, while the way to the server is backed up.
+      if (backedUp(socket)) {
+        return;
+      }
+      socket.emit(CLIENT_EVENTS.channel, [service, channel, payload]);
     },
     [connection, service, channel, def],
   );

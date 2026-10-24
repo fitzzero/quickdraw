@@ -126,10 +126,12 @@ export const CLIENT_RULES = `## What a client must do
   \`VALIDATION\`.
 - Send \`qd:ch\` and forget it: there is no acknowledgement and no error, so
   never wait for one, and drop a message rather than queue it while the
-  connection is backed up (Socket.IO calls that volatile). The server drops
-  a message silently when it is over the channel's rate, fails its schema,
-  or fails its \`requires\`, and ends the socket of a client that keeps
-  sending far over a channel's rate (below).
+  connection is backed up: not Socket.IO's volatile flag, which drops a
+  message whenever a write is in flight, so of the messages sent in one
+  tick it keeps only the first. The server drops a message silently when
+  it is over the channel's rate, fails its schema, or fails its
+  \`requires\`, and ends the socket of a client that keeps sending far over
+  a channel's rate (below).
 - Apply \`qd:e\` and \`qd:c\` frames by \`rev\`, not by arrival: behind a
   cluster, frames from two nodes can arrive out of order.
 - App rooms are per socket. A method joins the socket that called it
@@ -194,12 +196,12 @@ offer: its peer moves to the relay on hearing it.
    it and heard it. Through the relay a \`PeerMessage\` travels as the
    \`text\` of \`qd:relay\`. On \`fast\`, drop one rather than queue it
    while your connection is backed up; the server drops one while the
-   receiver's is (\`PEER_RELAY_FAST_BACKLOG\` relay messages waiting). A
-   side whose direct path lost a data channel (it closed, rather than ICE
-   failing) waits \`BYE_WAIT_MS\` for the peer's bye before it says
-   \`{ relay: true }\`: a peer that closes its link closes its data
-   channels too, and a \`{ relay: true }\` it hears after that asks it for
-   a new link.
+   receiver's is (\`PEER_RELAY_FAST_BACKLOG\` relay messages and volatile
+   stream frames waiting). A side whose direct path lost a data channel
+   (it closed, rather than ICE failing) waits \`BYE_WAIT_MS\` for the
+   peer's bye before it says \`{ relay: true }\`: a peer that closes its
+   link closes its data channels too, and a \`{ relay: true }\` it hears
+   after that asks it for a new link.
 4. Read link messages from both paths all along: the peer may move to the
    relay before you hear it say so. A link that opens on no path within
    \`OPEN_TIMEOUT_MS\` is over.

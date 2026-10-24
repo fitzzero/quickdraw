@@ -17,7 +17,7 @@
 //   half of each burst, per peer and for the connection's bytes, so a `rel`
 //   message is dropped here, where `send` says so, rather than silently by
 //   the server. A `fast` one is dropped too while the way to the server is
-//   backed up (`backedUp`), as a data channel's is: not Socket.IO's
+//   backed up (`../backlog.ts`), as a data channel's is: not Socket.IO's
 //   volatile, which drops a packet whenever a write is in flight, so that of
 //   two sent at once the second was always lost.
 //
@@ -34,13 +34,12 @@ import {
   PEER_RELAY_BURST,
   PEER_RELAY_BYTES_BURST,
   PEER_RELAY_BYTES_PER_SECOND,
-  PEER_RELAY_FAST_BACKLOG,
   PEER_RELAY_RATE,
   type HelloPeerLimits,
 } from "../../protocol/version";
+import { backedUp } from "../backlog";
 import type { QuickdrawConnection } from "../connection";
 import { throwLater } from "./core";
-import { FAST_BACKLOG_BYTES } from "./rtc";
 
 /** How long signals from a peer without a link wait for the app to answer. */
 export const PENDING_MS = 15_000;
@@ -324,26 +323,6 @@ function signalOf(
     .catch(
       (): Failure => ({ ok: false, e: { code: "TIMEOUT", message: "No answer to a peer signal" } }),
     );
-}
-
-/** What `backedUp` reads of a socket's engine.io connection. */
-interface EngineView {
-  readonly writeBuffer?: readonly unknown[];
-  readonly transport?: { readonly ws?: { readonly bufferedAmount?: unknown } };
-}
-
-/**
- * True while the way to the server is backed up: `PEER_RELAY_FAST_BACKLOG`
- * packets wait for the transport, or the WebSocket holds more than
- * `FAST_BACKLOG_BYTES` unsent (engine.io keeps it as its transport's `ws`).
- */
-function backedUp(socket: QuickdrawConnection["socket"]): boolean {
-  const engine = (socket as { readonly io?: { readonly engine?: EngineView } }).io?.engine;
-  if ((engine?.writeBuffer?.length ?? 0) >= PEER_RELAY_FAST_BACKLOG) {
-    return true;
-  }
-  const buffered = engine?.transport?.ws?.bufferedAmount;
-  return typeof buffered === "number" && buffered > FAST_BACKLOG_BYTES;
 }
 
 function relayOf(

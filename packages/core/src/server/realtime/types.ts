@@ -292,7 +292,8 @@ export interface StreamHandle<C extends AnyContract, K extends StreamName<C>> {
    * Appends an item to the stream (one scope of it, for a scoped stream):
    * checked against the stream's item schema (a mismatch throws `INTERNAL`),
    * kept in the scope's seed when the stream declares one, and sent to every
-   * subscriber as `qd:stream`, volatile when the stream says so.
+   * subscriber as `qd:stream`; a volatile stream's item skips a subscriber
+   * while its connection is backed up (`volatile` in the contract).
    */
   push(...args: StreamPushArgs<C, K>): void;
   /**

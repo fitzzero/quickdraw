@@ -360,7 +360,7 @@ function limitsSection(model: ProtocolModel): string[] {
       row("PEER_RELAY_BURST", " messages"),
       row("PEER_RELAY_BYTES_PER_SECOND", " bytes a second per socket"),
       row("PEER_RELAY_BYTES_BURST", " bytes"),
-      row("PEER_RELAY_FAST_BACKLOG", " relay messages waiting"),
+      row("PEER_RELAY_FAST_BACKLOG", " messages waiting"),
     ]),
     paragraph(DEFAULTS_INTRO),
     table(header, [
