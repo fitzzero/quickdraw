@@ -15,6 +15,7 @@ import { callData } from "./call";
 import {
   createQuickdrawConnection,
   credentialsEpochOf,
+  endedSessionOf,
   isServerDisconnect,
   isSessionRefusal,
   type ConnectionState,
@@ -219,7 +220,13 @@ describe("createQuickdrawConnection", () => {
       refusal: { code: "UNAUTHENTICATED" },
     });
     expect(credentialsEpochOf(connection)).toBe(1);
+    // The hello held through the drop says whose session the refusal ended.
+    expect(endedSessionOf(connection)?.hello?.userId).toBe(alice.userId);
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    // Refused again with no hello between: the session ended is still Alice's.
+    connection.open();
+    await until(() => credentialsEpochOf(connection) === 2);
+    expect(endedSessionOf(connection)?.hello?.userId).toBe(alice.userId);
   });
 
   it("keeps the user through reconnects refused with INTERNAL, and connects again by itself", async () => {
@@ -364,6 +371,7 @@ describe("createQuickdrawConnection", () => {
     await whenStatus(connection, "connected");
     expect(connection.setAuth({ principal: alice })).toBe(false);
     expect(credentialsEpochOf(connection)).toBe(0);
+    expect(endedSessionOf(connection)).toBeUndefined();
     // Other credentials move it on at once, and so does the server ending the session.
     connection.setAuth({ principal: bob });
     expect(credentialsEpochOf(connection)).toBe(1);
@@ -371,8 +379,14 @@ describe("createQuickdrawConnection", () => {
     app.server.access.disconnectUser(bob.userId);
     await whenStatus(connection, "disconnected");
     expect(credentialsEpochOf(connection)).toBe(2);
+    // That epoch keeps whose session it was, until other credentials begin the next.
+    expect(endedSessionOf(connection)?.hello?.userId).toBe(bob.userId);
+    connection.setAuth({ principal: alice });
+    expect(credentialsEpochOf(connection)).toBe(3);
+    expect(endedSessionOf(connection)).toBeUndefined();
     // A connection made elsewhere (a mock's) has none.
     expect(credentialsEpochOf({} as QuickdrawConnection)).toBe(0);
+    expect(endedSessionOf({} as QuickdrawConnection)).toBeUndefined();
   });
 
   it("reconnects with new credentials, and only when they change", async () => {

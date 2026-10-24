@@ -129,18 +129,26 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   (`useCollection().checking` names it until the scope's next load says),
   and only that id lets the load find it and makes `retry()` safe, since
   the second call fails `CONFLICT` instead of writing twice.
-- A mutation's call is sent only as the user it was made as: one whose user
-  changed before its request went out (`setAuth` in the same handler, an
-  async `onMutate`, a pause offline, a `scope` queue, a retry) fails
-  `CANCELLED`, never sent as the next user and not retried. Handle it in
-  `onError` like any refusal; new credentials for the same user send it.
+- A mutation hook checks each attempt of a call before it goes out, so the
+  call is sent only as the user it was made as: one whose user changed
+  first (`setAuth` in the same handler, an async `onMutate`, a pause
+  offline, a `scope` queue, a retry) fails `CANCELLED`, never sent as the
+  next user and not retried. So does an attempt that starts while new
+  credentials await their hello, even the same user's refreshed token: it
+  is refused, not held. Handle it in `onError` like any refusal, and send
+  again once the hello names the user. Not covered yet, each at a
+  reconnect whose cookie names someone else: `qd.<service>.<method>.call()`,
+  a hook call already in Socket.IO's send buffer, and an attempt that
+  starts between the reconnect's connect and its hello.
 - A mutation's result (`data`, `error`, `variables`, status) shows only
   while the server's hello names the user the call ran as: a component that
   stays mounted while the user changes shows the next user none of the last
   user's calls, and none while new credentials await their hello. Its
   callbacks still run for the user who made it. A call made while no hello
-  is held shows (pending, then its answer or error) under the credentials
-  it was made with, and new credentials hide it.
+  is held shows (pending, then its answer or error) while none is held
+  under the credentials it was made with, then only to the user the next
+  hello makes it (none, for one that settled first); new credentials hide
+  it.
 - A mutation that switches the user itself (an anonymous sign-in or
   sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
   hello arrives: act on its result in `onSuccess`, not in render.

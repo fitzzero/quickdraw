@@ -7,7 +7,8 @@
 // server ended the session that failed before any hello included; the same
 // user sees theirs again once new credentials' hello names them, and
 // through a reconnect. Against a real server whose `save` answers who called
-// it, refuses `"refuse"`, and holds `"hold"` until the test lets it answer.
+// it, refuses `"refuse"`, fails `"flaky"` once, and holds `"hold"` until the
+// test lets it answer.
 
 import { QueryClient, onlineManager } from "@tanstack/react-query";
 import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
@@ -20,6 +21,7 @@ import { deferred, tick, type Deferred } from "../server/__tests__/fixtures";
 import { renderWithQuickdraw } from "../testing/client";
 import { createTestApp, type TestApp } from "../testing/index";
 import { createQuickdrawClient } from "./createClient";
+import { methodKeyPrefix } from "./keys";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
 
 const server = initQuickdraw<{ principal: Principal }>();
@@ -37,6 +39,8 @@ const notes = defineContract("noteService", {
 const saved: { readonly by: string; readonly text: string }[] = [];
 /** While set, a save whose text starts with `"hold"` waits for it. */
 let held: Deferred<void> | undefined;
+/** True once a save of `"flaky"` failed: the next one goes through. */
+let flaked = false;
 
 const noteService = server.defineService(notes, {
   methods: {
@@ -45,6 +49,10 @@ const noteService = server.defineService(notes, {
       handler: async ({ input, ctx }) => {
         if (input.text === "refuse") {
           throw new QuickdrawError("FORBIDDEN", "Not yours to save");
+        }
+        if (input.text === "flaky" && !flaked) {
+          flaked = true;
+          throw new QuickdrawError("INTERNAL", "Not this time");
         }
         if (input.text.startsWith("hold")) {
           await held?.promise;
@@ -62,6 +70,7 @@ const apps: TestApp[] = [];
 afterEach(async () => {
   held?.resolve();
   held = undefined;
+  flaked = false;
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
   saved.length = 0;
 });
@@ -139,14 +148,18 @@ function Saver({
   );
 }
 
-/** Ada signed in on a test app, with a saver that sends `text`. */
-async function signedIn(text: string) {
+/**
+ * Ada signed in on a test app, with a saver that sends `text`. `principal`
+ * is the one the handshake sends: a test that changes it changes who the
+ * next connect speaks for without `setAuth`, as a session cookie would.
+ */
+async function signedIn(text: string, principal = { userId: "ada" }) {
   const app = await createTestApp({ services: [noteService] });
   apps.push(app as unknown as TestApp);
   const seen: Seen = [];
   const view = await renderWithQuickdraw(<Saver text={text} seen={seen} />, {
     app,
-    as: { userId: "ada" },
+    as: principal,
     client: qd,
   });
   const shown = within(view.container);
@@ -175,6 +188,26 @@ async function switchTo(view: Awaited<ReturnType<typeof signedIn>>["view"], user
     await tick();
   });
   await within(view.container).findByText(new RegExp(`^${userId} `));
+}
+
+/** Holds back every `qd:hello` `socket` receives until the returned function lets them in. */
+function holdHellos(socket: unknown): () => void {
+  const patched = socket as { onevent: (packet: { readonly data?: unknown }) => void };
+  const deliver = patched.onevent.bind(patched);
+  const waiting: { readonly data?: unknown }[] = [];
+  patched.onevent = (packet) => {
+    if (Array.isArray(packet.data) && packet.data[0] === "qd:hello") {
+      waiting.push(packet);
+    } else {
+      deliver(packet);
+    }
+  };
+  return () => {
+    Reflect.deleteProperty(patched, "onevent");
+    for (const packet of waiting.splice(0)) {
+      deliver(packet);
+    }
+  };
 }
 
 /** A boundary that records the code of every error a render throws, and shows `caught`. */
@@ -265,23 +298,48 @@ describe("a mounted mutation hook across a switch of users", () => {
     expect(saved).toEqual([]);
   });
 
+  it("shows nobody a call that failed after the server ended the session once a cookie signs the next user in", async () => {
+    const principal = { userId: "ada" };
+    const { app, view, seen, shown } = await signedIn("ada-note", principal);
+    app.server.access.disconnectUser("ada");
+    await shown.findByText(`- ${IDLE}`);
+    view.rerender(<Saver text="typed-after-ada-ended" seen={seen} />);
+    fireEvent.click(shown.getByText("save"));
+    await shown.findByText("- error data=- error=INTERNAL vars=typed-after-ada-ended");
+    // The same credentials, a cookie's, name Ed at the next connect: no epoch changes.
+    const signedInAgain = seen.length;
+    principal.userId = "ed";
+    act(() => {
+      view.connection.open();
+    });
+    await shown.findByText(`ed ${IDLE}`);
+    await act(async () => {
+      await tick(50);
+    });
+    expectNoCall(seen.slice(signedInAgain).filter(([user]) => user === "ed"));
+    expect(saved).toEqual([]);
+  });
+
   it("shows a call made before the first hello pending, then its answer", async () => {
+    held = deferred();
     const app = await createTestApp({ services: [noteService] });
     apps.push(app as unknown as TestApp);
     const seen: Seen = [];
-    const view = await renderWithQuickdraw(<Saver text="first-note" seen={seen} />, {
+    const view = await renderWithQuickdraw(<Saver text="hold-first-note" seen={seen} />, {
       app,
       as: { userId: "ada" },
       client: qd,
     });
+    const shown = within(view.container);
     // Sent at once, before the socket connects: it waits for it, and runs as Ada.
     expect(view.connection.getState().hello).toBeNull();
-    fireEvent.click(within(view.container).getByText("save"));
-    await within(view.container).findByText("ada success data=ada#1 error=- vars=first-note");
-    const beforeHello = seen.filter(([user]) => user === null).map(([, text]) => text);
-    expect(beforeHello, JSON.stringify(beforeHello)).toContain(
-      "pending data=- error=- vars=first-note",
-    );
+    const letIn = holdHellos(view.connection.socket);
+    fireEvent.click(shown.getByText("save"));
+    await shown.findByText("- pending data=- error=- vars=hold-first-note");
+    letIn();
+    await shown.findByText("ada pending data=- error=- vars=hold-first-note");
+    held.resolve();
+    await shown.findByText("ada success data=ada#1 error=- vars=hold-first-note");
   });
 
   it("shows the same user's result again once their new credentials' hello names them", async () => {
@@ -389,7 +447,10 @@ describe("a mounted mutation hook across a switch of users", () => {
 /** How each call a test made through the hook's `mutateAsync` ended, and the callbacks the hook ran. */
 interface Calls {
   save: ReturnType<typeof qd.notes.save.useMutation> | undefined;
+  /** Each call's code, `"resolved by <user>"` for one that succeeded. */
   readonly outcomes: string[];
+  /** The message of each call that failed. */
+  readonly messages: string[];
   readonly callbacks: string[];
 }
 
@@ -418,13 +479,20 @@ function Driven({
   return <p>{`${userId ?? "-"} ${shown}`}</p>;
 }
 
-/** Sends `text` through the hook's `mutateAsync`, keeping how the call ends. */
-function send(calls: Calls, text: string): void {
-  calls.save?.mutateAsync({ text }).then(
+/** Sends `input` through the hook's `mutateAsync`, keeping how the call ends. */
+function sendInput(calls: Calls, input: { readonly text: string }): void {
+  calls.save?.mutateAsync(input).then(
     (out) => calls.outcomes.push(`resolved by ${out.by}`),
-    (error: unknown) =>
-      calls.outcomes.push(error instanceof QuickdrawError ? error.code : String(error)),
+    (error: unknown) => {
+      calls.outcomes.push(error instanceof QuickdrawError ? error.code : String(error));
+      calls.messages.push(error instanceof Error ? error.message : String(error));
+    },
   );
+}
+
+/** Sends `{ text }` through the hook's `mutateAsync`, keeping how the call ends. */
+function send(calls: Calls, text: string): void {
+  sendInput(calls, { text });
 }
 
 /**
@@ -432,14 +500,18 @@ function send(calls: Calls, text: string): void {
  * the one the handshake sends: a test that changes it changes who the next
  * connect speaks for without `setAuth`, as a session cookie would.
  */
-async function driven(options?: SaveOptions, principal = { userId: "ada" }) {
+async function driven(
+  options?: SaveOptions,
+  principal = { userId: "ada" },
+  queryClient?: QueryClient,
+) {
   const app = await createTestApp({ services: [noteService] });
   apps.push(app as unknown as TestApp);
   const seen: Seen = [];
-  const calls: Calls = { save: undefined, outcomes: [], callbacks: [] };
+  const calls: Calls = { save: undefined, outcomes: [], messages: [], callbacks: [] };
   const view = await renderWithQuickdraw(
     <Driven calls={calls} seen={seen} {...(options === undefined ? {} : { options })} />,
-    { app, as: principal, client: qd },
+    { app, as: principal, client: qd, ...(queryClient === undefined ? {} : { queryClient }) },
   );
   await within(view.container).findByText(`ada ${IDLE}`);
   return { app, view, seen, calls };
@@ -621,6 +693,7 @@ describe("a call issued as one user, sent only as them", () => {
     await settle();
     expect(saved).toEqual([]);
     expect(calls.outcomes).toEqual(["CANCELLED"]);
+    expect(calls.messages).toEqual(["The credentials changed before the call was sent"]);
     expect(calls.callbacks).toEqual(["error CANCELLED", "settled CANCELLED"]);
     expect(opened).toEqual([]);
   });
@@ -644,6 +717,7 @@ describe("a call issued as one user, sent only as them", () => {
     await settle();
     expect(saved).toEqual([]);
     expect(calls.outcomes).toEqual(["CANCELLED"]);
+    expect(calls.messages).toEqual(["The user changed before the call was sent"]);
     // Ada back: her call's outcome is hers, and no answer of Ed's.
     await act(async () => {
       view.connection.setAuth({ principal: { userId: "ada" } });
@@ -763,6 +837,67 @@ describe("a call issued as one user, sent only as them", () => {
     expect(calls.outcomes).toEqual(["CANCELLED"]);
   });
 
+  it.each([
+    { next: "ed", saves: [], ends: ["CANCELLED"] },
+    {
+      next: "ada",
+      saves: [{ by: "ada", text: "typed-after-ada-ended" }],
+      ends: ["resolved by ada"],
+    },
+  ])(
+    "sends a call made after the server ended the session only as its user: a cookie signs $next in",
+    async ({ next, saves, ends }) => {
+      const gate = deferred();
+      const principal = { userId: "ada" };
+      const { app, view, calls } = await driven(
+        {
+          onMutate: async () => {
+            await gate.promise;
+          },
+        },
+        principal,
+      );
+      app.server.access.disconnectUser("ada");
+      await waitFor(() => {
+        expect(view.connection.getState().hello).toBeNull();
+      });
+      // Made with no session, and still in its onMutate when the app opens the connection again.
+      act(() => {
+        send(calls, "typed-after-ada-ended");
+      });
+      principal.userId = next;
+      act(() => {
+        view.connection.open();
+      });
+      await helloFor(view, next);
+      gate.resolve();
+      await settle();
+      expect(saved).toEqual(saves);
+      expect(calls.outcomes).toEqual(ends);
+    },
+  );
+
+  it("refuses a call whose onMutate ends after the server ended the session, before any hello", async () => {
+    const gate = deferred();
+    const { app, view, calls } = await driven({
+      onMutate: async () => {
+        await gate.promise;
+      },
+    });
+    act(() => {
+      send(calls, "ada-before-end");
+    });
+    app.server.access.disconnectUser("ada");
+    await waitFor(() => {
+      expect(view.connection.getState().hello).toBeNull();
+    });
+    gate.resolve();
+    await settle();
+    expect(saved).toEqual([]);
+    expect(calls.outcomes).toEqual(["CANCELLED"]);
+    expect(calls.messages).toEqual(["The session ended before the call was sent"]);
+  });
+
   it("sends a call across new credentials for the same user, once their hello names them", async () => {
     const gate = deferred();
     const { view, calls } = await driven({
@@ -781,6 +916,220 @@ describe("a call issued as one user, sent only as them", () => {
     gate.resolve();
     await within(view.container).findByText("ada success data=ada#1 error=- vars=ada-refresh");
     expect(saved).toEqual([{ by: "ada", text: "ada-refresh" }]);
+    expect(calls.outcomes).toEqual(["resolved by ada"]);
+  });
+
+  it("refuses an attempt that starts while the same user's new credentials await their hello", async () => {
+    const gate = deferred();
+    const { view, calls } = await driven({
+      onMutate: async () => {
+        await gate.promise;
+      },
+    });
+    act(() => {
+      send(calls, "ada-during-refresh");
+      view.connection.setAuth({ principal: { userId: "ada" }, refreshed: true });
+    });
+    // The refreshed token has no hello yet: nothing says whom it names, so the attempt is refused.
+    gate.resolve();
+    await settle(30);
+    await helloFor(view, "ada");
+    await settle();
+    expect(saved).toEqual([]);
+    expect(calls.outcomes).toEqual(["CANCELLED"]);
+    expect(calls.messages).toEqual(["The credentials changed before the call was sent"]);
+  });
+
+  it("sends both calls of one input object made across a same-user refresh", async () => {
+    const gate = deferred();
+    const { view, calls } = await driven({
+      onMutate: async () => {
+        await gate.promise;
+      },
+    });
+    const input = { text: "same-input" };
+    act(() => {
+      sendInput(calls, input);
+    });
+    await act(async () => {
+      view.connection.setAuth({ principal: { userId: "ada" }, refreshed: true });
+      await tick();
+    });
+    await helloFor(view, "ada");
+    act(() => {
+      sendInput(calls, input);
+    });
+    gate.resolve();
+    await settle();
+    expect(saved).toEqual([
+      { by: "ada", text: "same-input" },
+      { by: "ada", text: "same-input" },
+    ]);
+    expect(calls.outcomes).toEqual(["resolved by ada", "resolved by ada"]);
+  });
+
+  it("refuses a call paused offline across a switch while the next user's own call from the hook is sent", async () => {
+    const { view, calls } = await driven();
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      act(() => {
+        send(calls, "ada-paused");
+      });
+      await settle(30);
+      act(() => {
+        view.connection.setAuth({ principal: { userId: "ed" } });
+      });
+      await helloFor(view, "ed");
+      act(() => {
+        send(calls, "ed-own");
+      });
+      await settle(30);
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    await settle();
+    // Each attempt checks its own call's ticket, not the hook's latest call's.
+    expect(saved).toEqual([{ by: "ed", text: "ed-own" }]);
+    expect(calls.outcomes).toEqual(["CANCELLED", "resolved by ed"]);
+  });
+
+  it("never sends one user's call as the next when both users' calls share an input object", async () => {
+    const { view, calls } = await driven();
+    const input = { text: "shared-input" };
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      act(() => {
+        sendInput(calls, input);
+      });
+      await settle(30);
+      act(() => {
+        view.connection.setAuth({ principal: { userId: "ed" } });
+      });
+      await helloFor(view, "ed");
+      act(() => {
+        sendInput(calls, input);
+      });
+      await settle(30);
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    await settle();
+    // Nothing tells the two attempts apart: Ada's is refused, and Ed's may be with it.
+    expect(calls.outcomes[0]).toBe("CANCELLED");
+    expect(saved.length).toBeLessThanOrEqual(1);
+  });
+
+  it("sends the next user's call made with the input object of the last user's settled call", async () => {
+    const { view, calls } = await driven();
+    const input = { text: "reused-input" };
+    act(() => {
+      sendInput(calls, input);
+    });
+    await within(view.container).findByText("ada success data=ada#1 error=- vars=reused-input");
+    await act(async () => {
+      view.connection.setAuth({ principal: { userId: "ed" } });
+      await tick();
+    });
+    await helloFor(view, "ed");
+    act(() => {
+      sendInput(calls, input);
+    });
+    await within(view.container).findByText("ed success data=ed#2 error=- vars=reused-input");
+    expect(saved).toEqual([
+      { by: "ada", text: "reused-input" },
+      { by: "ed", text: "reused-input" },
+    ]);
+  });
+
+  it("lets go of a paused call the cache dropped, so the next user's call with its input is sent", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { view, calls } = await driven(undefined, { userId: "ada" }, queryClient);
+    const input = { text: "dropped-input" };
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      act(() => {
+        sendInput(calls, input);
+      });
+      await settle(30);
+      // Signing out: the app clears its cache, and TanStack drops the paused call unsettled.
+      act(() => {
+        queryClient.clear();
+        view.connection.setAuth({ principal: { userId: "ed" } });
+      });
+      await helloFor(view, "ed");
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    act(() => {
+      sendInput(calls, input);
+    });
+    await settle();
+    expect(saved).toEqual([{ by: "ed", text: "dropped-input" }]);
+    expect(calls.outcomes).toEqual(["resolved by ed"]);
+  });
+
+  it("still sends a call the cache dropped while its onMutate ran", async () => {
+    const gate = deferred();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { calls } = await driven(
+      {
+        onMutate: async () => {
+          await gate.promise;
+        },
+      },
+      { userId: "ada" },
+      queryClient,
+    );
+    act(() => {
+      send(calls, "ada-cleared");
+    });
+    act(() => {
+      queryClient.clear();
+    });
+    gate.resolve();
+    await settle();
+    // TanStack runs a dropped call it is still running: it is Ada's, and goes as hers.
+    expect(saved).toEqual([{ by: "ada", text: "ada-cleared" }]);
+    expect(calls.outcomes).toEqual(["resolved by ada"]);
+  });
+
+  it.each([
+    [
+      "its QueryClient's default",
+      () =>
+        new QueryClient({
+          defaultOptions: { queries: { retry: false }, mutations: { retry: 1, retryDelay: 1 } },
+        }),
+    ],
+    [
+      "setMutationDefaults for its key",
+      () => {
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        queryClient.setMutationDefaults(methodKeyPrefix("noteService", "save"), {
+          retry: 1,
+          retryDelay: 1,
+        });
+        return queryClient;
+      },
+    ],
+  ])("retries a call's other errors by %s", async (_by, make) => {
+    const { view, calls } = await driven(undefined, { userId: "ada" }, make());
+    act(() => {
+      send(calls, "flaky");
+    });
+    await within(view.container).findByText("ada success data=ada#1 error=- vars=flaky");
     expect(calls.outcomes).toEqual(["resolved by ada"]);
   });
 });

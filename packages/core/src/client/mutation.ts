@@ -14,28 +14,36 @@
 //
 // Each call carries a ticket from the moment it is issued (`issuer.ts`):
 // the user it is made as, and the credentials epoch it is made under. The
-// hook keeps it by the call's `variables`, and checks it at the start of
-// every attempt, before anything else: TanStack runs the mutation function
-// late (after `onMutate`, a pause offline, a `scope` queue) and again for a
+// hook keeps it by the call's `variables` until the call settles, or until
+// TanStack drops it unsettled for good (a paused call `queryClient.clear()`
+// removes), and checks every ticket of that value at the start of every
+// attempt, before anything else: TanStack runs the mutation function late
+// (after `onMutate`, a pause offline, a `scope` queue) and again for a
 // retry, and the call goes out as whoever the socket then speaks for. One
-// whose user changed meanwhile fails `CANCELLED`, never sent, and is not
-// retried; a refused item's `retry()` keeps the ticket of the call it sends
-// again.
+// whose user changed meanwhile fails `CANCELLED`, never sent, before its
+// optimistic update runs, and is not retried. A refused item's `retry()`
+// keeps the ticket of the call it sends again; refused so, the item shows
+// in `refused` again unless the cache was emptied meanwhile
+// (`liveHooks.ts`). A call already in Socket.IO's send buffer at a
+// reconnect, and an attempt that starts between a reconnect's connect and
+// its hello, are not caught here when a cookie names another user then
+// (the reconnect card's).
 //
 // The result shows a call's `data`, `error`, `variables` and status only to
-// the user it is made as, while a hello names them, or, for a call made
-// with no hello, to whoever views it under the credentials it was made
-// under: a hook that stays mounted across a switch of users shows the next
-// user none of the last user's calls, finished or in flight, and nothing
-// while new credentials await their hello; `throwOnError` throws only an
-// error it shows. Nothing else changes: the call still settles, and its
-// callbacks still run, for the user who made it. The observer is not reset,
-// which would drop the callbacks `mutate(variables, { onSuccess })` gave a
-// call still in flight.
+// the user it is made as, while a hello names them, or, for a call no hello
+// made anyone's yet, to whoever views it under the credentials it was made
+// under while no hello is held: a hook that stays mounted across a switch
+// of users shows the next user none of the last user's calls, finished or
+// in flight, and nothing while new credentials await their hello;
+// `throwOnError` throws only an error it shows. Nothing else changes: the
+// call still settles, and its callbacks still run, for the user who made
+// it. The observer is not reset, which would drop the callbacks
+// `mutate(variables, { onSuccess })` gave a call still in flight.
 
 import {
   useMutation,
   type MutateOptions,
+  type MutationCacheNotifyEvent,
   type QueryClient,
   type UseMutateAsyncFunction,
   type UseMutateFunction,
@@ -150,11 +158,48 @@ interface IssuedCalls<Output, Variables, Context> {
 }
 
 /**
+ * Runs `start`, TanStack's `mutate`, which adds the call's mutation to the
+ * cache before it returns, and calls `onDead` if that mutation leaves the
+ * cache while paused, or pauses once out of it (`queryClient.clear()` with
+ * the call offline or queued in its scope): TanStack never runs it again,
+ * so it never settles. One removed while it runs still settles.
+ */
+async function untilDead<T>(
+  queryClient: QueryClient,
+  start: () => Promise<T>,
+  onDead: () => void,
+): Promise<T> {
+  let starting = true;
+  let made: MutationCacheNotifyEvent["mutation"] | undefined;
+  let removed = false;
+  const stop = queryClient.getMutationCache().subscribe((event) => {
+    if (starting && made === undefined && event.type === "added") {
+      made = event.mutation;
+    } else if (made !== undefined && event.mutation === made) {
+      removed ||= event.type === "removed";
+      if (removed && made.state.isPaused) {
+        stop();
+        onDead();
+      }
+    }
+  });
+  const started = start();
+  starting = false;
+  try {
+    return await started;
+  } finally {
+    stop();
+  }
+}
+
+/**
  * TanStack's `mutate` and `mutateAsync`, each call issued with a ticket
- * (`issue`) kept in `tickets` by its variables until it settles, and in
- * `issued`: the state the hook then holds is that call's.
+ * (`issue`) kept in `tickets` by its variables until it settles (or is
+ * dropped unsettled for good, `untilDead`), and in `issued`: the state the
+ * hook then holds is that call's.
  */
 function useIssuedCalls<Output, Variables, Context>(
+  queryClient: QueryClient,
   run: UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>,
   issue: () => Ticket,
   tickets: Tickets,
@@ -168,14 +213,17 @@ function useIssuedCalls<Output, Variables, Context>(
     ): Promise<Output> => {
       issued.current = ticket;
       const release = tickets.hold(variables, ticket);
-      try {
-        return await run(variables, mutateOptions);
-      } finally {
+      const done = (): void => {
         release();
         ticket.settled();
+      };
+      try {
+        return await untilDead(queryClient, async () => await run(variables, mutateOptions), done);
+      } finally {
+        done();
       }
     },
-    [run, tickets, issued],
+    [queryClient, run, tickets, issued],
   );
   const mutateAsync = useCallback<
     UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>
@@ -264,9 +312,15 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
     },
   });
   const issue = useCallback(() => ticketOf(connection), [connection]);
-  const { sendAs, ...calls } = useIssuedCalls(mutation.mutateAsync, issue, tickets, issued);
+  const { sendAs, ...calls } = useIssuedCalls(
+    queryClient,
+    mutation.mutateAsync,
+    issue,
+    tickets,
+    issued,
+  );
   resend.current = sendAs;
-  // Only to its user while a hello names them, or under its epoch for a call made with no hello.
+  // To its user while a hello names them; a call nobody's yet, under its epoch while none is held.
   const result = shownTo(issued.current, hello, epoch) ? mutation : nothingOf(mutation);
   return { ...result, ...calls };
 }

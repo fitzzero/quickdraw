@@ -9,29 +9,41 @@
 //   (`userOf`: `null`, anonymous, counts as a user). Issued while none is
 //   (before the first hello, while new credentials await theirs, after the
 //   server ended the session), its call waits for the next socket, so it is
-//   the user's whom the next hello under the same epoch names; one that
-//   settles first, or whose epoch changes first, is nobody's.
+//   the user's whom the next hello under the same epoch names: after a
+//   session the server ended, only if that hello names the user whose
+//   session it was (`endedSessionOf`), signed in again as a cookie would.
+//   One that settles first, whose epoch changes first, or whose next hello
+//   names another user than the ended session's, is nobody's.
 // - Sent: TanStack runs a mutation's function late (after `onMutate`, a
 //   pause while offline, a `scope` queue) and again for each retry, and a
 //   call goes out on whatever socket the connection holds then, as whoever
 //   that socket's credentials name. So every attempt is checked first
-//   (`checkedTicket`): under the epoch it was made under, it is sent unless a
-//   hello names another user than its own (credentials that now name someone
-//   else, as a cookie might); under another epoch, only once that epoch's
-//   hello names its own user (the same user's new token). Otherwise it fails
-//   `CANCELLED`, never sent, and is not retried.
+//   (`checkedTicket`), against every ticket held for its variables: a call
+//   made as a user is sent, under the epoch it was made under, unless a
+//   hello names another user (credentials that now name someone else, as a
+//   cookie might), and under another epoch only once that epoch's hello
+//   names its own user (the same user's new token); a call nobody's yet is
+//   sent under its epoch while no hello is held, or while it awaits the one
+//   that names its user. Otherwise it fails `CANCELLED`, never sent, before
+//   its optimistic update runs, and is not retried.
 // - Shown (`shownTo`): a call made as a user, only while a hello names that
 //   user (the next user sees none of it, nor anyone while new credentials
 //   await their hello; the same user sees it again, and through a
-//   reconnect); a call made with no hello, to whoever views it under the
-//   epoch it was made under, pending and then its answer or error.
+//   reconnect); a call nobody's yet, to whoever views it under its epoch
+//   while no hello is held, or while it awaits its hello.
+//
+// A call buffered in Socket.IO's send buffer when a reconnect's credentials
+// name another user (a cookie), and an attempt that starts between a
+// reconnect's connect and its hello (the last hello is kept through a
+// drop), still go out as that user, as `call()`'s own do: the reconnect
+// card's.
 //
 // React-free.
 
 import { QuickdrawError } from "../protocol/errors";
 import type { HelloFrame } from "../protocol/version";
 import { userOf } from "./cacheSession";
-import { credentialsEpochOf, type QuickdrawConnection } from "./connection";
+import { credentialsEpochOf, endedSessionOf, type QuickdrawConnection } from "./connection";
 
 /** Who one call of a mutation hook is made as, and under which credentials. */
 export interface Ticket {
@@ -39,6 +51,8 @@ export interface Ticket {
   readonly epoch: number;
   /** The user it is made as (`null`: anonymous); `undefined` while none is known, and for good if none will be. */
   user(): string | null | undefined;
+  /** True while a call issued with no hello awaits the hello that will name its user. */
+  waiting(): boolean;
   /** The call settled: if no hello named its user yet, none will. */
   settled(): void;
 }
@@ -49,16 +63,26 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
   const { hello } = connection.getState();
   if (hello !== null) {
     const userId = userOf(hello);
-    return Object.freeze({ epoch, user: () => userId, settled: () => undefined });
+    return Object.freeze({
+      epoch,
+      user: () => userId,
+      waiting: () => false,
+      settled: () => undefined,
+    });
   }
-  // No hello: the call waits for the next socket, and is the user's its hello names.
+  // No hello: the call waits for the next socket, and is the user's its hello names; after a
+  // session the server ended, only if it names that session's user again.
+  const ended = endedSessionOf(connection)?.hello ?? null;
   let userId: string | null | undefined;
   let waiting = true;
   const stop = connection.onHello((next) => {
     if (waiting) {
       waiting = false;
-      // Other credentials since: whoever this hello names, the call was not made as them.
-      if (credentialsEpochOf(connection) === epoch) {
+      // Other credentials since, or another user than the ended session's: not made as them.
+      if (
+        credentialsEpochOf(connection) === epoch &&
+        (ended === null || userOf(ended) === userOf(next))
+      ) {
         userId = userOf(next);
       }
       stop();
@@ -67,6 +91,7 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
   return Object.freeze({
     epoch,
     user: () => userId,
+    waiting: () => waiting,
     settled(): void {
       if (waiting) {
         waiting = false;
@@ -77,13 +102,26 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
 }
 
 /**
+ * For a call no hello has named the user of: true under the epoch it was
+ * made under, while no hello is held, or while it awaits the one that will
+ * name its user. Once a hello names someone without making the call theirs,
+ * it is nobody's to show or to send.
+ */
+function unclaimed(ticket: Ticket, hello: HelloFrame | null, epoch: number): boolean {
+  return epoch === ticket.epoch && (hello === null || ticket.waiting());
+}
+
+/**
  * True when a call made with `ticket` may be sent now, while the connection
  * holds `hello` under credentials epoch `epoch`.
  */
 export function sendable(ticket: Ticket, hello: HelloFrame | null, epoch: number): boolean {
   const user = ticket.user();
-  // Whether the hello names the call's user: undefined while either is unknown.
-  const same = hello === null || user === undefined ? undefined : userOf(hello) === user;
+  if (user === undefined) {
+    return unclaimed(ticket, hello, epoch);
+  }
+  // Whether the hello names the call's user: undefined while none is held.
+  const same = hello === null ? undefined : userOf(hello) === user;
   if (epoch === ticket.epoch) {
     // The credentials it was made under, unless they name another user now.
     return same !== false;
@@ -96,30 +134,51 @@ export function sendable(ticket: Ticket, hello: HelloFrame | null, epoch: number
 const refusals = new WeakSet<QuickdrawError>();
 
 /** True for the refusal of a call whose user changed before it was sent (`checkedTicket`). */
-export function isUserChange(error: unknown): boolean {
+export function isUserChange(error: unknown): error is QuickdrawError {
   return error instanceof QuickdrawError && refusals.has(error);
 }
 
 /**
- * The ticket of the call made with `variables`, when it may be sent on
- * `connection` now; else throws the call's refusal: `CANCELLED`, as for a
- * call new credentials found waiting to be sent. A call with no ticket (made
- * outside the hook, or one of several calls of one `variables` value whose
- * tickets disagree) is refused too: nothing says whose it is.
+ * The refusal of a call that may not be sent on `connection` now, `CANCELLED`
+ * as for a call new credentials found waiting to be sent: a hello names a
+ * user it is not made as; or none does yet, under other credentials or
+ * after a session the server ended; or the hook holds no ticket for it.
+ */
+function refusalOn(connection: QuickdrawConnection, ticketed: boolean): QuickdrawError {
+  let message = "The user changed before the call was sent";
+  if (!ticketed) {
+    message = "The call was not sent: nothing says which user made it";
+  } else if (connection.getState().hello === null) {
+    message =
+      endedSessionOf(connection) === undefined
+        ? "The credentials changed before the call was sent"
+        : "The session ended before the call was sent";
+  }
+  const refusal = new QuickdrawError("CANCELLED", message);
+  refusals.add(refusal);
+  return refusal;
+}
+
+/**
+ * The ticket of the call made with `variables`, the first the hook holds
+ * for that value, when every ticket it holds for it may be sent on
+ * `connection` now; else throws the call's refusal. A call the hook holds
+ * no ticket for (made outside it, or one TanStack dropped and still ran) is
+ * refused too: nothing says whose it is.
  */
 export function checkedTicket(
   tickets: Tickets,
   variables: unknown,
   connection: QuickdrawConnection,
 ): Ticket {
-  const ticket = tickets.of(variables);
+  const held = tickets.of(variables);
+  const [ticket] = held;
   const { hello } = connection.getState();
-  if (ticket !== undefined && sendable(ticket, hello, credentialsEpochOf(connection))) {
+  const epoch = credentialsEpochOf(connection);
+  if (ticket !== undefined && held.every((each) => sendable(each, hello, epoch))) {
     return ticket;
   }
-  const refusal = new QuickdrawError("CANCELLED", "The user changed before the call was sent");
-  refusals.add(refusal);
-  throw refusal;
+  throw refusalOn(connection, ticket !== undefined);
 }
 
 /**
@@ -137,8 +196,7 @@ export function shownTo(
   }
   const user = ticket.user();
   if (user === undefined) {
-    // Made with no hello: to whoever views it under the credentials it was made under.
-    return epoch === ticket.epoch;
+    return unclaimed(ticket, hello, epoch);
   }
   return hello !== null && userOf(hello) === user;
 }
@@ -152,8 +210,8 @@ export function shownOn(ticket: Ticket | undefined, connection: QuickdrawConnect
 export interface Tickets {
   /** Keeps `ticket` for a call made with `variables`; returns the function that lets it go. */
   hold(variables: unknown, ticket: Ticket): () => void;
-  /** The ticket of the call made with `variables`; `undefined` for none, or tickets that disagree. */
-  of(variables: unknown): Ticket | undefined;
+  /** The tickets held for calls made with `variables`, oldest first. */
+  of(variables: unknown): readonly Ticket[];
 }
 
 /** The tickets of one hook's calls. */
@@ -190,12 +248,6 @@ export function createTickets(): Tickets {
         }
       };
     },
-    of(variables: unknown): Ticket | undefined {
-      const [first, ...others] = heldFor(variables) ?? [];
-      const agree = others.every(
-        (other) => other.epoch === first?.epoch && other.user() === first.user(),
-      );
-      return agree ? first : undefined;
-    },
+    of: (variables: unknown): readonly Ticket[] => heldFor(variables) ?? [],
   });
 }

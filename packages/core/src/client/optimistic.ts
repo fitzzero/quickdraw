@@ -258,6 +258,8 @@ export interface StoreInternals extends OverlayStore {
   unchecked(): ScopeRef[];
   /** Drops a refused addition: the app dismissed it, or sends its call again. */
   dismiss(addition: Addition): void;
+  /** How many times the store was emptied for another user (`reset`): what it held before is gone. */
+  generation(): number;
   /** Ends the finished additions to a scope that it accounts for (`settleAdditions`). */
   settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void;
   /** Drops every layer and every revision seen: the cache was emptied for another user. */
@@ -705,6 +707,7 @@ function createStore(queryClient: QueryClient): StoreInternals {
     dismiss(addition: Addition): void {
       discard(layers, [], [addition]);
     },
+    generation: () => layers.additions.generation,
     settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void {
       settleScope(layers, { service, collection, scope }, evidence);
     },

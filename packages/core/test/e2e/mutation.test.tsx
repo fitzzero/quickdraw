@@ -8,6 +8,7 @@
 import { act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createQuickdrawClient, overlaysOf, type CollectionEntry } from "../../src/client/index";
+import { deferred } from "../../src/server/__tests__/fixtures";
 import { renderWithQuickdraw } from "../../src/testing/client";
 import { collectionKey } from "../../src/utils/index";
 import { as, e2eApp, projectContract, taskContract } from "../fixtures/app";
@@ -199,10 +200,38 @@ describe("an optimistic create", () => {
   });
 });
 
-/** P1's board with a create whose card stays when refused (`onRefused: "keep"`), to retry or dismiss. */
-function KeptBoard({ projectId }: { readonly projectId: string }) {
+/** A refused card's `retry()`, as an app may hold it past the render that offered it. */
+interface HeldRetry {
+  retry?: () => Promise<void>;
+}
+
+/** While `until` is set, a create's `onMutate` waits for it. */
+interface Pause {
+  until?: Promise<void>;
+}
+
+/**
+ * P1's board with a create whose card stays when refused (`onRefused:
+ * "keep"`), to retry or dismiss; `held` keeps the first refused card's
+ * `retry()`, and `pause` holds a create in its `onMutate`.
+ */
+function KeptBoard({
+  projectId,
+  held,
+  pause,
+}: {
+  readonly projectId: string;
+  readonly held?: HeldRetry;
+  readonly pause?: Pause;
+}) {
   const { items, pending, refused } = qd.task.board.useCollection(projectId);
+  if (held !== undefined) {
+    held.retry ??= refused[0]?.retry;
+  }
   const create = qd.task.create.useMutation({
+    onMutate: async () => {
+      await pause?.until;
+    },
     optimistic: (input, cache) =>
       cache.addItem(
         "board",
@@ -293,7 +322,65 @@ function LoggedBoard({ projectId, log }: { readonly projectId: string; readonly 
   );
 }
 
+/** Holds back every `qd:hello` `socket` receives until the returned function lets them in. */
+function holdHellos(socket: unknown): () => void {
+  const patched = socket as { onevent: (packet: { readonly data?: unknown }) => void };
+  const deliver = patched.onevent.bind(patched);
+  const waiting: { readonly data?: unknown }[] = [];
+  patched.onevent = (packet) => {
+    if (Array.isArray(packet.data) && packet.data[0] === "qd:hello") {
+      waiting.push(packet);
+    } else {
+      deliver(packet);
+    }
+  };
+  return () => {
+    Reflect.deleteProperty(patched, "onevent");
+    for (const packet of waiting.splice(0)) {
+      deliver(packet);
+    }
+  };
+}
+
 describe("an optimistic create with onRefused: keep (finding F6.4)", () => {
+  it("shows a card refused again, CANCELLED, when its retry() starts while the user's new credentials await their hello", async () => {
+    const { app } = await e2e.start();
+    const board = e2e.board();
+    const held: HeldRetry = {};
+    // Di reads P1 through its access list, and may not create there.
+    const view = await renderWithQuickdraw(<KeptBoard projectId={board.p1} held={held} />, {
+      app,
+      as: as(board.di),
+      client: qd,
+    });
+    await view.findByText("card T1");
+    fireEvent.click(view.getByText("add First"));
+    await view.findByText("failed First FORBIDDEN");
+    // Di's token is refreshed, and the retry starts before her new credentials' hello is let in.
+    const letIn = holdHellos(view.connection.socket);
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.di), refreshed: true });
+      await held.retry?.();
+    });
+    expect(view.connection.getState().hello).toBeNull();
+    letIn();
+    // Her hello names her again: the card is back, refused with what stopped it, never sent.
+    await view.findByText("failed First CANCELLED");
+    expect(await titlesOf(board.p1)).not.toContain("First");
+    // Sent now, and refused by the server: the update added it anew, once.
+    fireEvent.click(view.getByText("retry First"));
+    await view.findByText("failed First FORBIDDEN");
+    expect(view.getAllByText(/^failed First/)).toHaveLength(1);
+    // Sent again once she may create there: as her.
+    await e2e.prisma().project.update({
+      where: { id: board.p1 },
+      data: { acl: [{ userId: board.di, level: "Moderate" }] },
+    });
+    fireEvent.click(view.getByText("retry First"));
+    await view.findByText("card First");
+    expect(await titlesOf(board.p1)).toContain("First");
+  });
+
   it("refuses a refused card's retry() made after a switch of users, never sending it as the next", async () => {
     const { app } = await e2e.start();
     const board = e2e.board();
@@ -320,6 +407,11 @@ describe("an optimistic create with onRefused: keep (finding F6.4)", () => {
       return (
         <>
           <p>{`mutation ${create.status} ${create.error?.code ?? "-"}`}</p>
+          <ul>
+            {refused.map(({ item, error }) => (
+              <li key={item.id}>{`failed ${item.title} ${error.code}`}</li>
+            ))}
+          </ul>
           <button
             type="button"
             onClick={() => create.mutate({ projectId: board.p1, title: "First" })}
@@ -349,6 +441,44 @@ describe("an optimistic create with onRefused: keep (finding F6.4)", () => {
       await held.retry?.();
     });
     expect(await e2e.prisma().task.findFirst({ where: { title: "First" } })).toBeNull();
+    // Refused before it was sent, the card does not come back: Bo's cache was emptied of it.
+    expect(view.queryByText(/^failed First/)).toBeNull();
+  });
+
+  it("never shows the next user a refused card whose held retry() their hello overtook", async () => {
+    const { app } = await e2e.start();
+    const board = e2e.board();
+    const held: HeldRetry = {};
+    const pause: Pause = {};
+    const view = await renderWithQuickdraw(
+      <KeptBoard projectId={board.p1} held={held} pause={pause} />,
+      { app, as: as(board.di), client: qd },
+    );
+    await view.findByText("card T1");
+    fireEvent.click(view.getByText("add First"));
+    await view.findByText("failed First FORBIDDEN");
+    // The retry starts as Di's, and waits in its onMutate while Bo signs in.
+    const gate = deferred();
+    pause.until = gate.promise;
+    let retried: Promise<void> | undefined;
+    act(() => {
+      retried = held.retry?.();
+    });
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.bo) });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    await waitFor(() => {
+      expect(view.connection.getState().hello?.userId).toBe(board.bo);
+    });
+    gate.resolve();
+    await act(async () => {
+      await retried;
+    });
+    expect(view.queryByText(/^(failed|card|sending) First/)).toBeNull();
+    expect(await titlesOf(board.p1)).not.toContain("First");
   });
 
   it("shows a refused card in the render that shows the error, and retries through the mutation (finding F8.3)", async () => {

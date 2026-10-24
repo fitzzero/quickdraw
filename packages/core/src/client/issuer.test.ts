@@ -1,8 +1,9 @@
 // The tickets of a mutation hook's calls (`issuer.ts`): who a call is made
 // as, under which credentials epoch, when it may be sent and when the hook
 // may show it. Over a connection whose hello the test sets; the epoch rules
-// take the epoch as given (the connection's own counter is
-// `connection.test.ts`'s, and the hook's wiring `mutation.test.tsx`'s).
+// take the epoch as given (the connection's own counter, and whose session
+// the server ended, are `connection.test.ts`'s, and the hook's wiring
+// `mutation.test.tsx`'s).
 
 import { describe, expect, it } from "vitest";
 import { QuickdrawError } from "../protocol/errors";
@@ -47,24 +48,38 @@ function helloConnection(hello: HelloFrame | null) {
   };
 }
 
-/** A ticket made as `user` under `epoch`. */
-function ticket(user: string | null | undefined, epoch = 0): Ticket {
-  return { epoch, user: () => user, settled: () => undefined };
+/** A ticket made as `user` under `epoch`; `waiting` while a call made with no hello awaits its own. */
+function ticket(user: string | null | undefined, epoch = 0, waiting = false): Ticket {
+  return { epoch, user: () => user, waiting: () => waiting, settled: () => undefined };
+}
+
+/** The error `run` throws. */
+function thrownBy(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
 }
 
 describe("ticketOf", () => {
   it("makes a call issued under a hello the user's it names, anonymous included", () => {
-    expect(ticketOf(helloConnection(fakeHello("ada")).connection).user()).toBe("ada");
+    const issued = ticketOf(helloConnection(fakeHello("ada")).connection);
+    expect(issued.user()).toBe("ada");
+    expect(issued.waiting()).toBe(false);
     expect(ticketOf(helloConnection(fakeHello(null)).connection).user()).toBeNull();
-    expect(ticketOf(helloConnection(fakeHello("ada")).connection).epoch).toBe(0);
+    expect(issued.epoch).toBe(0);
   });
 
   it("makes a call issued with no hello the user's the next hello names", () => {
     const { connection, set, listening } = helloConnection(null);
     const issued = ticketOf(connection);
     expect(issued.user()).toBeUndefined();
+    expect(issued.waiting()).toBe(true);
     set(fakeHello("ed"));
     expect(issued.user()).toBe("ed");
+    expect(issued.waiting()).toBe(false);
     expect(listening()).toBe(0);
     // Later hellos change nothing: the call ran on Ed's socket.
     set(fakeHello("ada"));
@@ -75,6 +90,7 @@ describe("ticketOf", () => {
     const { connection, set, listening } = helloConnection(null);
     const issued = ticketOf(connection);
     issued.settled();
+    expect(issued.waiting()).toBe(false);
     expect(listening()).toBe(0);
     set(fakeHello("ed"));
     expect(issued.user()).toBeUndefined();
@@ -90,9 +106,16 @@ describe("sendable", () => {
     expect(sendable(ticket("ada"), fakeHello("ed"), 0)).toBe(false);
     expect(sendable(ticket("ada"), fakeHello(null), 0)).toBe(false);
     expect(sendable(ticket(null), fakeHello(null), 0)).toBe(true);
-    // Made with no hello: the next one is its own.
+  });
+
+  it("sends a call nobody's yet under its epoch only until a hello names someone else", () => {
+    // Made with no hello: the next one is its own, while it awaits it.
+    expect(sendable(ticket(undefined, 0, true), null, 0)).toBe(true);
+    expect(sendable(ticket(undefined, 0, true), fakeHello("ed"), 0)).toBe(true);
+    // Settled before any hello, or not claimed by the one that came: nobody's to send.
     expect(sendable(ticket(undefined), null, 0)).toBe(true);
-    expect(sendable(ticket(undefined), fakeHello("ed"), 0)).toBe(true);
+    expect(sendable(ticket(undefined), fakeHello("ed"), 0)).toBe(false);
+    expect(sendable(ticket(undefined), fakeHello(null), 0)).toBe(false);
   });
 
   it("sends a call under another epoch only once its hello names the call's user", () => {
@@ -102,8 +125,8 @@ describe("sendable", () => {
     expect(sendable(ticket("ada"), fakeHello("ed"), 1)).toBe(false);
     // Anonymous, then signed in: the anonymous call is not the user's.
     expect(sendable(ticket(null), fakeHello("ada"), 1)).toBe(false);
-    expect(sendable(ticket(undefined), null, 1)).toBe(false);
-    expect(sendable(ticket(undefined), fakeHello("ed"), 1)).toBe(false);
+    expect(sendable(ticket(undefined, 0, true), null, 1)).toBe(false);
+    expect(sendable(ticket(undefined, 0, true), fakeHello("ed"), 1)).toBe(false);
   });
 });
 
@@ -117,11 +140,13 @@ describe("shownTo", () => {
     expect(shownTo(ticket(null), fakeHello(null), 0)).toBe(true);
   });
 
-  it("shows a call made with no hello to whoever views it under its epoch", () => {
+  it("shows a call nobody's yet under its epoch while no hello is held, or while it awaits its own", () => {
     expect(shownTo(ticket(undefined), null, 0)).toBe(true);
-    expect(shownTo(ticket(undefined), fakeHello("ed"), 0)).toBe(true);
+    expect(shownTo(ticket(undefined, 0, true), fakeHello("ed"), 0)).toBe(true);
+    // One that settled before any hello: not for whoever signs in next, a cookie's way included.
+    expect(shownTo(ticket(undefined), fakeHello("ed"), 0)).toBe(false);
     expect(shownTo(ticket(undefined), null, 1)).toBe(false);
-    expect(shownTo(ticket(undefined), fakeHello("ed"), 1)).toBe(false);
+    expect(shownTo(ticket(undefined, 0, true), fakeHello("ed"), 1)).toBe(false);
   });
 
   it("hides nothing before any call is issued", () => {
@@ -136,51 +161,87 @@ describe("createTickets", () => {
     const input = { text: "a" };
     const ada = ticket("ada");
     const release = tickets.hold(input, ada);
-    expect(tickets.of(input)).toBe(ada);
-    expect(tickets.of({ text: "a" })).toBeUndefined();
+    expect(tickets.of(input)).toEqual([ada]);
+    expect(tickets.of({ text: "a" })).toEqual([]);
     const byValue = tickets.hold("ping", ada);
-    expect(tickets.of("ping")).toBe(ada);
+    expect(tickets.of("ping")).toEqual([ada]);
     release();
     byValue();
-    expect(tickets.of(input)).toBeUndefined();
-    expect(tickets.of("ping")).toBeUndefined();
+    // Let go twice: nothing more goes.
+    release();
+    expect(tickets.of(input)).toEqual([]);
+    expect(tickets.of("ping")).toEqual([]);
   });
 
-  it("gives no ticket for one variables value held by tickets that disagree", () => {
+  it("keeps every ticket held for one value, oldest first, and lets each go alone", () => {
     const tickets = createTickets();
     const input = { text: "same" };
     const ada = ticket("ada");
-    tickets.hold(input, ada);
-    tickets.hold(input, ticket("ada"));
-    expect(tickets.of(input)).toBe(ada);
-    const release = tickets.hold(input, ticket("ed", 1));
-    expect(tickets.of(input)).toBeUndefined();
-    release();
-    expect(tickets.of(input)).toBe(ada);
+    const ed = ticket("ed", 1);
+    const first = tickets.hold(input, ada);
+    tickets.hold(input, ed);
+    expect(tickets.of(input)).toEqual([ada, ed]);
+    first();
+    expect(tickets.of(input)).toEqual([ed]);
   });
 });
 
 describe("checkedTicket", () => {
-  it("gives the ticket of a call it may send, and refuses one whose user changed, CANCELLED", () => {
+  /** `tickets` holding `held` for `input`. */
+  function holding(input: unknown, ...held: Ticket[]) {
     const tickets = createTickets();
-    const input = { text: "a" };
-    tickets.hold(input, ticket("ada"));
-    expect(checkedTicket(tickets, input, helloConnection(fakeHello("ada")).connection).user()).toBe(
-      "ada",
-    );
-    let refusal: unknown;
-    try {
-      checkedTicket(tickets, input, helloConnection(fakeHello("ed")).connection);
-    } catch (error) {
-      refusal = error;
+    for (const each of held) {
+      tickets.hold(input, each);
     }
-    expect(refusal).toBeInstanceOf(QuickdrawError);
-    expect(refusal).toMatchObject({ code: "CANCELLED" });
-    expect(isUserChange(refusal)).toBe(true);
+    return tickets;
+  }
+
+  it("gives the first ticket once every ticket held for the value may be sent", () => {
+    const input = { text: "a" };
+    const ada = ticket("ada");
+    // The same user's call made under other credentials since, sent again once their hello names her.
+    const tickets = holding(input, ada, ticket("ada", 1));
+    const { connection } = helloConnection(fakeHello("ada"));
+    expect(checkedTicket(tickets, input, connection)).toBe(ada);
+  });
+
+  it("refuses every call of a value one ticket of which may not be sent, CANCELLED", () => {
+    const input = { text: "shared" };
+    const { connection } = helloConnection(fakeHello("ed"));
+    for (const tickets of [
+      holding(input, ticket("ed"), ticket("ada")),
+      holding(input, ticket("ada"), ticket("ed")),
+    ]) {
+      const refusal = thrownBy(() => checkedTicket(tickets, input, connection));
+      expect(refusal).toBeInstanceOf(QuickdrawError);
+      expect(refusal).toMatchObject({
+        code: "CANCELLED",
+        message: "The user changed before the call was sent",
+      });
+      expect(isUserChange(refusal)).toBe(true);
+    }
     expect(isUserChange(new QuickdrawError("CANCELLED", "Another cancel"))).toBe(false);
-    // No ticket: nothing says whose the call is.
-    expect(() => checkedTicket(tickets, { text: "b" }, helloConnection(null).connection)).toThrow(
-      "The user changed before the call was sent",
+  });
+
+  it("says the credentials changed when no hello names the call's user yet", () => {
+    const input = { text: "a" };
+    const tickets = holding(input, ticket("ada", 1));
+    expect(
+      thrownBy(() => checkedTicket(tickets, input, helloConnection(null).connection)),
+    ).toMatchObject({
+      code: "CANCELLED",
+      message: "The credentials changed before the call was sent",
+    });
+  });
+
+  it("refuses a call it holds no ticket for: nothing says whose it is", () => {
+    const refusal = thrownBy(() =>
+      checkedTicket(createTickets(), { text: "b" }, helloConnection(null).connection),
     );
+    expect(refusal).toMatchObject({
+      code: "CANCELLED",
+      message: "The call was not sent: nothing says which user made it",
+    });
+    expect(isUserChange(refusal)).toBe(true);
   });
 });

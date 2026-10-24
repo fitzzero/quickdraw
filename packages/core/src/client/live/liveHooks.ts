@@ -8,6 +8,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 import type { QuickdrawConnection } from "../connection";
 import { serverStateOf, useAwaitingHello, useHello, useQuickdrawContext } from "../context";
+import { isUserChange } from "../issuer";
 import type { QuickdrawError } from "../../protocol/errors";
 import {
   NO_OVERLAYS,
@@ -108,9 +109,12 @@ export interface RefusedItem<Item> {
    * `isPending`, `onSuccess`, `onError` and `onSettled` follow the retry): it
    * leaves `refused`, and the update adds the item anew, `pending` while the
    * call is in flight. Resolves once the call settles, and never rejects: a
-   * refusal shows in `refused` again. Send it only when the call is
-   * idempotent (an id the client made, which the server keeps) if its error
-   * left the outcome unknown (`isUnknownOutcome`).
+   * refusal shows in `refused` again, one that stopped the call before it
+   * was sent included (`CANCELLED`: its user changed, or new credentials
+   * await their hello), unless the cache was emptied for another user
+   * meanwhile. Send it only when the call is idempotent (an id the client
+   * made, which the server keeps) if its error left the outcome unknown
+   * (`isUnknownOutcome`).
    */
   retry(): Promise<void>;
 }
@@ -133,11 +137,28 @@ function refusedItems(
       store.dismiss(addition);
     },
     retry: async () => {
+      const { service, collection, scope, refusal } = addition;
+      const held = store
+        .view(service)
+        .refused(collection, scope)
+        .some((each) => each.addition === addition);
+      const generation = store.generation();
       store.dismiss(addition);
       try {
-        await addition.refusal?.retry();
-      } catch {
-        // Refused again: shown in `refused` again, with the new error.
+        await refusal?.retry();
+      } catch (again) {
+        // Refused again: shown in `refused` again, with the new error. Refused before it was sent
+        // (its user changed), its update never added it anew: it goes back as it was, with that
+        // error, unless the cache was emptied for someone else meanwhile.
+        if (
+          held &&
+          refusal !== undefined &&
+          isUserChange(again) &&
+          store.generation() === generation
+        ) {
+          const back = store.addItem(service, collection, scope, addition.item, true);
+          store.refuse({ layers: [], additions: [back] }, { retry: refusal.retry, error: again });
+        }
       }
     },
   }));

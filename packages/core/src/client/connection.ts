@@ -400,6 +400,13 @@ function registered(session: Session, connection: QuickdrawConnection): Quickdra
 function renewSession(session: Session): void {
   session.established = false;
   session.epoch += 1;
+  session.ended = undefined;
+}
+
+/** The server ended the session held with `hello`: a new epoch, which keeps whose it was. */
+function endSession(session: Session, hello: HelloFrame | null): void {
+  session.epoch += 1;
+  session.ended = { hello: hello ?? session.ended?.hello ?? null };
 }
 
 /**
@@ -414,6 +421,20 @@ function renewSession(session: Session): void {
  */
 export function credentialsEpochOf(connection: QuickdrawConnection): number {
   return sessions.get(connection)?.epoch ?? 0;
+}
+
+/**
+ * Whose session the server ended to begin `connection`'s credentials epoch
+ * (`credentialsEpochOf`): the hello it held then, or, when it held none,
+ * the one held when the server ended a session before that (`null` if
+ * none). `undefined` when the epoch began otherwise: the connection's
+ * creation, or other credentials. A call made with no hello since is that
+ * user's, sent only once a hello names them again (`issuer.ts`).
+ */
+export function endedSessionOf(
+  connection: QuickdrawConnection,
+): { readonly hello: HelloFrame | null } | undefined {
+  return sessions.get(connection)?.ended;
 }
 
 /**
@@ -475,7 +496,8 @@ function defaultTimeout(option: number | undefined, hello: HelloFrame | null): n
 /**
  * Whether the socket has connected with the current credentials since the
  * connection last opened (the next connect is then a reconnect), the
- * credentials epoch (`credentialsEpochOf`), and the topics, the
+ * credentials epoch (`credentialsEpochOf`) and whose session the server
+ * ended to begin it (`endedSessionOf`), and the topics, the
  * subscription lane and the retries after a refusal the server could not
  * authenticate (`retry.ts`), which stop retrying and waiting when the
  * connection closes.
@@ -483,6 +505,8 @@ function defaultTimeout(option: number | undefined, hello: HelloFrame | null): n
 interface Session {
   established: boolean;
   epoch: number;
+  /** Set while the epoch began with the server ending a session (`endedSessionOf`). */
+  ended?: { readonly hello: HelloFrame | null } | undefined;
   readonly topics: Topics;
   readonly lane: SubscriptionLane;
   readonly retry: Retry;
@@ -669,7 +693,7 @@ function listenToSocket(wiring: Wiring): void {
     // The server ended the session: who it was is no longer known.
     const ended = isServerDisconnect(reason);
     if (ended) {
-      session.epoch += 1;
+      endSession(session, store.get().hello);
     }
     store.set({
       status,
@@ -691,7 +715,7 @@ function listenToSocket(wiring: Wiring): void {
     session.established = false;
     const ended = isSessionRefusal(error.data);
     if (ended) {
-      session.epoch += 1;
+      endSession(session, store.get().hello);
       // Socket.IO would send them on the next connect, as whoever the credentials then name.
       failBuffered(
         socket,

@@ -237,12 +237,14 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   it: the observer is not reset, which would drop the callbacks a
   `mutate(variables, options)` gave a call still in flight.
   A call made while no hello is held (before the first, while new
-  credentials await theirs, after the server ended the session) shows to
-  whoever views it under the credentials it was made under, pending and
-  then its answer or error, and new credentials hide it (below). A mutation
-  that switches the user itself (an anonymous sign-in or sign-up, then
-  `setAuth`) hides its `data` and `isSuccess` once the new hello arrives:
-  act on its result in `onSuccess`.
+  credentials await theirs, after the server ended the session) shows,
+  pending and then its answer or error, while none is held under the
+  credentials it was made under, then only to the user the next hello
+  makes it (below): one that settled first shows to nobody once a hello
+  names anyone, a cookie's sign-in included, and new credentials hide it.
+  A mutation that switches the user itself (an anonymous sign-in or
+  sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
+  hello arrives: act on its result in `onSuccess`.
 - **A mutation is sent only as the user who made it.** TanStack runs a
   mutation's function late (after an async `onMutate`, after a pause while
   offline, behind a `scope` queue) and again for every retry, and the call
@@ -253,21 +255,39 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   one), and a late answer could then show Ada Ed's result. Each call is now
   bound, as it is made, to its user and to the connection's credentials
   epoch, a count of credential changes and sessions the server ended, and
-  every attempt checks it first: under other credentials, only a hello
-  naming the same user lets it go out (a refreshed token), and under the
-  same ones, a hello naming another user (a cookie that changed) stops it.
-  A stopped call fails `CANCELLED` ("The user changed before the call was
-  sent"), never sent, before its optimistic update runs; `onError` and
-  `onSettled` run, `mutateAsync` rejects, and the hook's `retry` is not
-  asked about it. A refused item's `retry()` keeps the call's own user.
-  **Behavior change:** a call whose attempt starts while new credentials
-  await their hello is refused this way, even for the same user, as a call
-  waiting in the send buffer then always was; a call made while no hello is
-  held now shows under unchanged credentials (it showed idle until the
+  every attempt first checks each call of the hook still on its way with
+  that very input (TanStack hands an attempt only its input): under other
+  credentials, only a hello naming the same user lets it go out (a
+  refreshed token), and under the same ones, a hello naming another user
+  (a cookie that changed) stops it. A call made with no hello is the next
+  hello's user's; after a session the server ended, only if that hello
+  names the session's user again, so a cookie that signs someone else in
+  finds it nobody's: neither shown nor sent once a hello names anyone,
+  like one that settled before any hello. A stopped call
+  fails `CANCELLED`, never sent, before its optimistic update runs: "The
+  user changed before the call was sent" when a hello names someone else,
+  "The credentials changed before the call was sent" or "The session ended
+  before the call was sent" while no hello names its user yet. `onError`
+  and `onSettled` run, `mutateAsync` rejects, and the hook's `retry` is
+  not asked about it. A refused item's `retry()` keeps the call's own
+  user, and a retry stopped so shows the item in `refused` again, with
+  that `CANCELLED`, unless the cache was emptied for another user
+  meanwhile. A paused call that TanStack drops unsettled
+  (`queryClient.clear()` while offline) no longer holds its input against
+  later calls. **Behavior change:** a call whose attempt starts while new
+  credentials await their hello is refused this way, even for the same
+  user, as a call waiting in the send buffer then always was (it is not
+  held until the hello: send it again from `onError`); a call made while
+  no hello is held now shows while none is held (it showed idle until the
   next hello, and a failure before any hello was never shown), so a slow
   first connect shows the call pending, and a call after the server ended
-  the session shows its failure. `qd.<service>.<method>.call()` is
-  unchanged.
+  the session shows its failure to the signed-out page. **Not covered
+  yet**, each the reconnect card's: `qd.<service>.<method>.call()`, which
+  is unchanged and emits at once; a hook call already in Socket.IO's send
+  buffer when a reconnect's cookie names another user, which goes out as
+  them; and an attempt that starts between a reconnect's connect and its
+  hello, which is checked against the last hello (a drop keeps it) and
+  goes out on the new socket, as whoever its cookie names.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its

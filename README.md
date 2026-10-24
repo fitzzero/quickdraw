@@ -1805,13 +1805,24 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
   `addItem` and `addEntity` (below).
 - A mutation hook's call is bound, as it is made, to the user it is made as
-  and to the credentials it is made under. Its request goes out only as
-  that user: one whose user changed before it was sent (`setAuth` in the
-  same handler, an async `onMutate`, a pause while offline, a `scope`
-  queue, a retry) fails `CANCELLED`, is never sent as the next user, and is
-  not retried; new credentials for the same user send it once their hello
-  names them. A refused item's `retry()` sends again as the user who made
-  the call.
+  and to the credentials it is made under, and each attempt is checked
+  before it goes out: one whose user changed first (`setAuth` in the same
+  handler, an async `onMutate`, a pause while offline, a `scope` queue, a
+  retry, a cookie that names someone else after a reconnect) fails
+  `CANCELLED`, is not sent as the next user, and is not retried. An attempt
+  that starts while new credentials await their hello is refused the same
+  way, even for the same user's refreshed token (it is not held until the
+  hello); one that starts once that hello names the call's user is sent. A
+  call made after the server ended the session is sent only if the next
+  hello names that session's user again. A refused item's `retry()` sends
+  again as the user who made the call, and when this check stops it the
+  item shows in `refused` again, with the `CANCELLED`. Three cases are not
+  covered yet, each at a reconnect whose credentials (a cookie) now name
+  another user: `qd.<service>.<method>.call()`, which emits at once; a hook
+  call already waiting in Socket.IO's send buffer; and an attempt that
+  starts between the reconnect's connect and its hello, which is checked
+  against the last hello (a drop keeps it). Each goes out as whoever the
+  new socket speaks for.
 - A mutation hook shows a call (its `data`, `error`, `variables` and
   status) only to the user it is made as, while the server's hello names
   them. A component that stays mounted while the user changes shows the
@@ -1821,11 +1832,15 @@ export function TaskDetail({ id }: { readonly id: string }) {
   throws only such an error. The call still settles, and its callbacks
   still run, for the user who made it. A call made while no hello is held
   (before the first, while new credentials await theirs, after the server
-  ended the session) shows to whoever views it under the same credentials,
-  pending and then its answer or error, and runs as the user the next hello
-  names; new credentials hide it. A call that itself switches the user (an
-  anonymous sign-in or sign-up, then `setAuth`) hides its result once the
-  new hello arrives: act on it in `onSuccess`.
+  ended the session) becomes the call of the user the next hello names
+  (after a session the server ended, only if it names that session's user
+  again). It shows, pending and then its answer or error, while no hello
+  is held under the same credentials, and once one is, only to that user:
+  one that settled first, or that the hello did not make anyone's, shows
+  to nobody then, a cookie's sign-in included. New credentials hide it. A
+  call that itself switches the user (an anonymous sign-in or sign-up,
+  then `setAuth`) hides its result once the new hello arrives: act on it
+  in `onSuccess`.
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches
@@ -1863,7 +1878,7 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `useCollection` and a search's held scope show nothing of another row,
   scope or user while a new id, scope or user loads. A mounted mutation
   hook shows the next user none of the last user's calls, nor sends them as
-  the next user (above).
+  the next user, but for the three reconnect cases above.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
