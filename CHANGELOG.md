@@ -218,6 +218,16 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   them. A reconnect with the same credentials keeps the hello, so `data`
   stays through it as before; new credentials hide it until their hello,
   and the same user's shows again while the join runs.
+- **`useJoin` shows `data` only for the input it joined.** The carry above
+  compared the user, not the input: when a component changed what it joins
+  (room `r1` to `r2`) for the same user, the first render reported `r2`
+  joined with `r1`'s answer before `r2`'s join had even started, kept that
+  answer while `r2` joined, and showed it beside `r2`'s refusal. A join now
+  keeps its input's key (by value, as the re-join compares it), and the hook
+  shows `data`, `isJoined` and `error` only for the input it renders with: a
+  new input shows `joining` from its first render, with no `data`, until its
+  own answer. A reconnect for the same user and input keeps `data` as
+  before.
 - **A mounted mutation hook shows a call only to the user it ran as.** A
   member's `useMutation` returned TanStack's state as it was, and TanStack
   keeps it on the hook's observer, outside the cache the session empties: a

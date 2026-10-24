@@ -192,8 +192,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 - Joining a room: `useJoin(qd.task.enterBoard, { projectId })` runs the
   joining call on every connection (a reconnect is a new socket in no room)
   and when the input changes, never on a re-render, with `status`,
-  `isJoined`, `data` (the join's answer, shown only to the user it ran as),
-  `error` and `retry()` (a refused join, tried again on the user's say).
+  `isJoined`, `data` (the join's answer, shown only to the user it ran as
+  and for the input it ran with: a new input is `joining`, with no `data`,
+  until its own answer), `error` and `retry()` (a refused join, tried
+  again on the user's say).
   Never join from a plain `useQuery` or a mount effect: a reconnect leaves
   the socket out of the room while the cached answer still looks fine.
   Without React, `connection.onHello`.
