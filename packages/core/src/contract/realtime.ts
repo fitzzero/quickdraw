@@ -107,9 +107,11 @@ export interface StreamDef<Item extends StandardSchemaV1 = StandardSchemaV1> {
   /**
    * Send items volatile: an item is dropped for a socket while its
    * connection is backed up (64 relay messages and volatile frames sent to
-   * it waiting), never queued, and never only because another frame went to
-   * it in the same tick. More than 64 items to one socket in one tick drop
-   * the rest: push a snapshot instead of a burst that big. Default `false`.
+   * it wait for its transport), never queued, and never only because
+   * another frame went to it just before. On a free connection the first
+   * item of a burst goes at once and 64 more wait for it; the rest are
+   * dropped until the connection sends what waits, so push a snapshot
+   * instead of a bigger burst. Default `false`.
    */
   readonly volatile?: boolean;
   /** Who may subscribe. Without it the stream is closed. */

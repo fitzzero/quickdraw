@@ -219,7 +219,10 @@ until it is replaced.
   socket knows its backlog. A node of an earlier version, during a rolling
   deploy, still sends through the adapter's room broadcast with Socket.IO's
   volatile flag, which drops an item whenever a write to the socket is in
-  flight.
+  flight. Both kinds of push go as a server-side event, which the Redis
+  adapter sends as JSON: on a server that sends binary (`binary: true`),
+  each binary value of the items goes beside them, in base64, and every
+  node puts it back, so its subscribers and its seed get it as binary.
 - **Room hosts.** Every node knows each app room's host (host mode,
   `ctx.rooms.setHost`): each change goes to every node, and a node that
   starts asks the others for the hosts their sockets are, wired with

@@ -35,11 +35,16 @@ const room = defineContract("roomService", {
     news: { item: z.string(), seed: 2, access: "public" },
     secret: { item: z.string(), access: { service: "Admin" } },
   },
-  channels: { cursor: { payload: z.object({ x: z.number(), y: z.number().default(0) }) } },
+  channels: {
+    cursor: { payload: z.object({ x: z.number(), y: z.number().default(0) }) },
+    /** A rate no burst here reaches: what the client sends is what the handler gets. */
+    aim: { payload: z.object({ n: z.number() }), ratePerSecond: 10_000, burst: 10_000 },
+  },
   events: { shouted: { payload: z.object({ text: z.string() }) } },
 });
 
 const cursors: { readonly userId: string; readonly x: number; readonly y: number }[] = [];
+const aims: number[] = [];
 
 const roomService = server.defineService(room, {
   methods: {
@@ -61,6 +66,12 @@ const roomService = server.defineService(room, {
         cursors.push({ userId: ctx.principal.userId, ...payload });
       },
     },
+    aim: {
+      access: "authenticated",
+      handler: (payload) => {
+        aims.push(payload.n);
+      },
+    },
   },
 });
 
@@ -70,6 +81,7 @@ const apps: TestApp[] = [];
 afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
   cursors.length = 0;
+  aims.length = 0;
 });
 
 async function start() {
@@ -121,6 +133,23 @@ function Burst() {
     }
   }, [isReady, send]);
   return <p>{isReady ? "ready" : "waiting"}</p>;
+}
+
+/** Sends `count` aims in one click: in one tick. */
+function Aim({ count }: { readonly count: number }) {
+  const { send, isReady } = qd.room.aim.useChannel();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        for (let n = 0; n < count; n += 1) {
+          send({ n });
+        }
+      }}
+    >
+      {isReady ? "ready" : "waiting"}
+    </button>
+  );
 }
 
 function Shouts() {
@@ -361,6 +390,23 @@ describe("useChannel", () => {
     await waitFor(() => {
       expect(cursors).toEqual([{ userId: "ada", x: 3, y: 0 }]);
     });
+  });
+
+  it("sends 64 of a burst of 100 in one tick: the engine holds the one it is writing until it drains", async () => {
+    const app = await start();
+    const view = await renderWithQuickdraw(<Aim count={100} />, { app, as: ada, client: qd });
+    const button = await view.findByText("ready");
+    act(() => {
+      button.click();
+    });
+    await waitFor(() => {
+      expect(aims).toHaveLength(64);
+    });
+    // The other 36 were dropped, not held: a round trip later the handler has the first 64 alone.
+    await act(async () => {
+      await qd.room.enter.call({ room: "lobby" });
+    });
+    expect(aims).toEqual(Array.from({ length: 64 }, (_, n) => n));
   });
 });
 

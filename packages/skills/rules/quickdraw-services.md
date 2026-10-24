@@ -341,8 +341,9 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   never a bootstrap call beside the stream; `validate: "development"` there
   skips the per-item schema check in production for a hot stream. A
   `volatile: true` stream drops an item for a socket only while 64 wait on
-  its connection, so more than 64 to one socket in one tick lose the rest:
-  push one snapshot instead of a burst that big. A feed
+  its connection: of a burst, a socket on a free connection gets 65 (one
+  goes at once) and the rest are dropped until the connection sends what
+  waits, so push one snapshot instead of a bigger burst. A feed
   only a room's sockets may read takes `access: { room }`, never an entry
   policy that repeats the room's membership: a scoped stream computes the
   room from its scope, ``{ room: (worldId) => `world:${worldId}` }``, and

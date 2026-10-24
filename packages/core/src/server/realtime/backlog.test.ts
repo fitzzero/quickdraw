@@ -68,16 +68,19 @@ const frame = (n: number) => ["worldService", "world", "w1", n];
 
 describe("a volatile stream's frames", () => {
   it("skip a socket whose connection is backed up, and go to the others in one broadcast each", () => {
-    const { room, broadcasts, push, socketOf } = server(["a"]);
-    // Nothing drains: the count of a's connection only grows.
+    const { room, broadcasts, push, socketOf } = server(["a", "b"]);
+    // b joins the room once a is backed up. Nothing drains: a's count only grows.
+    room.delete("b");
     push(...Array.from({ length: PEER_RELAY_FAST_BACKLOG }, (_, n) => n));
     expect(backedUp(socketOf("a"))).toBe(true);
     room.add("b");
     push(64, 65);
+    // One slow subscriber costs the room's others nothing: b gets both, and is counted for them.
     expect(broadcasts.slice(-2)).toEqual([
       { except: ["a"], frame: frame(64) },
       { except: ["a"], frame: frame(65) },
     ]);
+    expect(backedUp(socketOf("b"))).toBe(false);
     // A drain empties a's count: the next frame reaches both.
     socketOf("a").conn.emit("drain");
     push(66);
