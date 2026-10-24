@@ -147,8 +147,8 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   callbacks still run for the user who made it. A call made while no hello
   is held shows (pending, then its answer or error) while none is held
   under the credentials it was made with, then only to the user the next
-  hello makes it (none, for one that settled first); new credentials hide
-  it.
+  hello makes it, settled or not (none, when another user's cookie signs
+  in after the server ended the session); new credentials hide it.
 - A mutation that switches the user itself (an anonymous sign-in or
   sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
   hello arrives: act on its result in `onSuccess`, not in render.

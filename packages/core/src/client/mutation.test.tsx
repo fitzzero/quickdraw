@@ -22,6 +22,8 @@ import { renderWithQuickdraw } from "../testing/client";
 import { createTestApp, type TestApp } from "../testing/index";
 import { createQuickdrawClient } from "./createClient";
 import { methodKeyPrefix } from "./keys";
+import { useOverlayView, useRefusedItems, type RefusedItem } from "./live/liveHooks";
+import type { OptimisticCache } from "./optimistic";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
 
 const server = initQuickdraw<{ principal: Principal }>();
@@ -1131,5 +1133,266 @@ describe("a call issued as one user, sent only as them", () => {
     });
     await within(view.container).findByText("ada success data=ada#1 error=- vars=flaky");
     expect(calls.outcomes).toEqual(["resolved by ada"]);
+  });
+
+  it("refuses a call made after the server ended the session once new credentials for the same user come, saying so", async () => {
+    const gate = deferred();
+    const { app, view, calls } = await driven({
+      onMutate: async () => {
+        await gate.promise;
+      },
+    });
+    app.server.access.disconnectUser("ada");
+    await waitFor(() => {
+      expect(view.connection.getState().hello).toBeNull();
+    });
+    act(() => {
+      send(calls, "made-after-end");
+      view.connection.setAuth({ principal: { userId: "ada" }, refreshed: true });
+      send(calls, "made-after-setauth");
+    });
+    await helloFor(view, "ada");
+    gate.resolve();
+    await settle();
+    // Made under the ended session's credentials, the first is not sent under new ones, even Ada's.
+    expect(saved).toEqual([{ by: "ada", text: "made-after-setauth" }]);
+    expect(calls.outcomes).toEqual(["CANCELLED", "resolved by ada"]);
+    expect(calls.messages).toEqual(["The credentials changed before the call was sent"]);
+  });
+
+  it("still sends a call queued in its scope that the cache dropped while its onMutate ran", async () => {
+    held = deferred();
+    const gate = deferred();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { calls } = await driven(
+      {
+        scope: { id: "notes" },
+        onMutate: async (input) => {
+          if (input.text === "queued") {
+            await gate.promise;
+          }
+        },
+      },
+      { userId: "ada" },
+      queryClient,
+    );
+    act(() => {
+      send(calls, "hold-first");
+      send(calls, "queued");
+    });
+    await settle(30);
+    // TanStack marks a queued call paused before its onMutate ends; it still runs it once dropped.
+    act(() => {
+      queryClient.clear();
+    });
+    gate.resolve();
+    await settle(60);
+    held.resolve();
+    await settle();
+    expect(saved.map(({ by, text }) => `${by}:${text}`).sort()).toEqual([
+      "ada:hold-first",
+      "ada:queued",
+    ]);
+    expect(calls.outcomes).toEqual(["resolved by ada", "resolved by ada"]);
+  });
+
+  it("still sends a call made offline that the cache dropped while its onMutate ran, once back", async () => {
+    const gate = deferred();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { calls } = await driven(
+      {
+        onMutate: async () => {
+          await gate.promise;
+        },
+      },
+      { userId: "ada" },
+      queryClient,
+    );
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      act(() => {
+        send(calls, "offline-cleared");
+      });
+      await settle(30);
+      act(() => {
+        queryClient.clear();
+      });
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    gate.resolve();
+    await settle();
+    expect(saved).toEqual([{ by: "ada", text: "offline-cleared" }]);
+    expect(calls.outcomes).toEqual(["resolved by ada"]);
+  });
+
+  it("still sends a call the cache dropped during a retry's delay, after a pause it came back from", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { calls } = await driven({ retry: 1, retryDelay: 200 }, { userId: "ada" }, queryClient);
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      act(() => {
+        send(calls, "flaky");
+      });
+      await settle(30);
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    // Back online, its first attempt fails, and TanStack waits before the second.
+    await waitFor(() => {
+      expect(queryClient.getMutationCache().getAll()[0]?.state.failureCount).toBe(1);
+    });
+    act(() => {
+      queryClient.clear();
+    });
+    await settle(400);
+    expect(saved).toEqual([{ by: "ada", text: "flaky" }]);
+    expect(calls.outcomes).toEqual(["resolved by ada"]);
+  });
+});
+
+/** What a test drives a kept-item hook with, and the refused items it last rendered. */
+interface KeptCalls {
+  save: ReturnType<typeof qd.notes.save.useMutation> | undefined;
+  refused: readonly RefusedItem<unknown>[];
+}
+
+/** A hook whose calls add a kept item to scope `s` of `all`, and that scope's refused items. */
+function KeptNotes({
+  calls,
+  queryClient,
+}: {
+  readonly calls: KeptCalls;
+  readonly queryClient: QueryClient;
+}) {
+  const { userId } = useQuickdraw();
+  const save = qd.notes.save.useMutation({
+    // The notes service has no collection: the item goes to a scope only this test reads.
+    optimistic: (input, cache) => {
+      (cache as OptimisticCache).addItem("all", "s", { text: input.text }, { onRefused: "keep" });
+    },
+  });
+  const overlays = useOverlayView(queryClient, "noteService");
+  const refused = useRefusedItems(queryClient, overlays, "all", "s");
+  calls.save = save;
+  calls.refused = refused;
+  const items = refused.map(
+    ({ item, error }) => `${String(Reflect.get(Object(item), "text"))}:${error.code}`,
+  );
+  return <p>{`${userId ?? "-"} refused=[${items.join(",")}]`}</p>;
+}
+
+/** A test app whose handshakes wait for `opened` when `holds` says so, as a slow session store would. */
+async function slowHandshakes(
+  opened: Promise<void>,
+  holds: (auth: Record<string, unknown>) => boolean,
+) {
+  const app = await createTestApp({
+    services: [noteService],
+    auth: {
+      authenticate: async ({ auth }) => {
+        if (holds(auth)) {
+          await opened;
+        }
+        const { principal } = auth as { readonly principal?: Principal };
+        return principal ?? null;
+      },
+    },
+  });
+  apps.push(app as unknown as TestApp);
+  return app;
+}
+
+describe("a kept item whose call failed before its user's hello", () => {
+  it("retries as its user once the first hello comes, when the first connect outlasted the call", async () => {
+    const opened = deferred();
+    const app = await slowHandshakes(opened.promise, () => true);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const calls: KeptCalls = { save: undefined, refused: [] };
+    const view = render(
+      <QuickdrawProvider
+        client={qd}
+        url={app.url}
+        auth={{ principal: { userId: "ada" } }}
+        transports={["websocket"]}
+        queryClient={queryClient}
+        timeoutMs={300}
+      >
+        <KeptNotes calls={calls} queryClient={queryClient} />
+      </QuickdrawProvider>,
+    );
+    const shown = within(view.container);
+    await shown.findByText("- refused=[]");
+    // Sent while the handshake waits: it times out unsent, in the send buffer.
+    act(() => {
+      calls.save?.mutate({ text: "first-note" });
+    });
+    await shown.findByText("- refused=[first-note:INTERNAL]");
+    opened.resolve();
+    await shown.findByText("ada refused=[first-note:INTERNAL]");
+    await act(async () => {
+      await calls.refused[0]?.retry();
+    });
+    await shown.findByText("ada refused=[]");
+    expect(saved).toEqual([{ by: "ada", text: "first-note" }]);
+    view.unmount();
+  });
+
+  it("retries as its user once their hello comes, when a refreshed token's reconnect outlasted the call", async () => {
+    const opened = deferred();
+    const app = await slowHandshakes(opened.promise, (auth) => auth.refreshed === true);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const calls: KeptCalls = { save: undefined, refused: [] };
+    let refresh = (): void => undefined;
+    function App() {
+      const [auth, setAuth] = useState<Record<string, unknown>>({ principal: { userId: "ada" } });
+      refresh = () => {
+        setAuth({ principal: { userId: "ada" }, refreshed: true });
+      };
+      return (
+        <QuickdrawProvider
+          client={qd}
+          url={app.url}
+          auth={auth}
+          transports={["websocket"]}
+          queryClient={queryClient}
+          timeoutMs={300}
+        >
+          <KeptNotes calls={calls} queryClient={queryClient} />
+        </QuickdrawProvider>
+      );
+    }
+    const view = render(<App />);
+    const shown = within(view.container);
+    await shown.findByText("ada refused=[]");
+    act(() => {
+      refresh();
+    });
+    await shown.findByText("- refused=[]");
+    // Sent while the refreshed token's handshake waits: it times out unsent.
+    act(() => {
+      calls.save?.mutate({ text: "during-refresh" });
+    });
+    await settle(500);
+    opened.resolve();
+    await shown.findByText("ada refused=[during-refresh:INTERNAL]");
+    await act(async () => {
+      await calls.refused[0]?.retry();
+    });
+    await shown.findByText("ada refused=[]");
+    expect(saved).toEqual([{ by: "ada", text: "during-refresh" }]);
+    view.unmount();
   });
 });

@@ -50,7 +50,7 @@ function helloConnection(hello: HelloFrame | null) {
 
 /** A ticket made as `user` under `epoch`; `waiting` while a call made with no hello awaits its own. */
 function ticket(user: string | null | undefined, epoch = 0, waiting = false): Ticket {
-  return { epoch, user: () => user, waiting: () => waiting, settled: () => undefined };
+  return { epoch, user: () => user, waiting: () => waiting };
 }
 
 /** The error `run` throws. */
@@ -84,16 +84,6 @@ describe("ticketOf", () => {
     // Later hellos change nothing: the call ran on Ed's socket.
     set(fakeHello("ada"));
     expect(issued.user()).toBe("ed");
-  });
-
-  it("makes a call issued with no hello that settled before one nobody's", () => {
-    const { connection, set, listening } = helloConnection(null);
-    const issued = ticketOf(connection);
-    issued.settled();
-    expect(issued.waiting()).toBe(false);
-    expect(listening()).toBe(0);
-    set(fakeHello("ed"));
-    expect(issued.user()).toBeUndefined();
   });
 });
 
@@ -223,15 +213,26 @@ describe("checkedTicket", () => {
     expect(isUserChange(new QuickdrawError("CANCELLED", "Another cancel"))).toBe(false);
   });
 
-  it("says the credentials changed when no hello names the call's user yet", () => {
+  it("says the user changed only when a hello names someone the call is not made as", () => {
     const input = { text: "a" };
-    const tickets = holding(input, ticket("ada", 1));
-    expect(
-      thrownBy(() => checkedTicket(tickets, input, helloConnection(null).connection)),
-    ).toMatchObject({
+    const refusalOf = (held: Ticket, hello: HelloFrame | null): unknown =>
+      thrownBy(() => checkedTicket(holding(input, held), input, helloConnection(hello).connection));
+    const credentials = "The credentials changed before the call was sent";
+    const user = "The user changed before the call was sent";
+    // Made under other credentials, whose user no hello names yet.
+    expect(refusalOf(ticket("ada", 1), null)).toMatchObject({
       code: "CANCELLED",
-      message: "The credentials changed before the call was sent",
+      message: credentials,
     });
+    // A call no hello made anyone's, from other credentials: whoever the hello names, they changed.
+    expect(refusalOf(ticket(undefined, 1), fakeHello("ada"))).toMatchObject({
+      message: credentials,
+    });
+    // Under its own credentials, a hello names someone who did not make it theirs.
+    expect(refusalOf(ticket(undefined, 0), fakeHello("ed"))).toMatchObject({ message: user });
+    // Made as Ada, and the hello names Ed: the user changed, whatever the credentials.
+    expect(refusalOf(ticket("ada", 1), fakeHello("ed"))).toMatchObject({ message: user });
+    expect(refusalOf(ticket("ada", 0), fakeHello("ed"))).toMatchObject({ message: user });
   });
 
   it("refuses a call it holds no ticket for: nothing says whose it is", () => {

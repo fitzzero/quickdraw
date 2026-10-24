@@ -1814,7 +1814,9 @@ export function TaskDetail({ id }: { readonly id: string }) {
   way, even for the same user's refreshed token (it is not held until the
   hello); one that starts once that hello names the call's user is sent. A
   call made after the server ended the session is sent only if the next
-  hello names that session's user again. A refused item's `retry()` sends
+  hello comes under the same credentials (a cookie that signs in again)
+  and names that session's user; new credentials (`setAuth`) refuse it,
+  even for that user. A refused item's `retry()` sends
   again as the user who made the call, and when this check stops it the
   item shows in `refused` again, with the `CANCELLED`. Three cases are not
   covered yet, each at a reconnect whose credentials (a cookie) now name
@@ -1832,12 +1834,13 @@ export function TaskDetail({ id }: { readonly id: string }) {
   throws only such an error. The call still settles, and its callbacks
   still run, for the user who made it. A call made while no hello is held
   (before the first, while new credentials await theirs, after the server
-  ended the session) becomes the call of the user the next hello names
-  (after a session the server ended, only if it names that session's user
-  again). It shows, pending and then its answer or error, while no hello
-  is held under the same credentials, and once one is, only to that user:
-  one that settled first, or that the hello did not make anyone's, shows
-  to nobody then, a cookie's sign-in included. New credentials hide it. A
+  ended the session) becomes the call of the user the next hello under the
+  same credentials names, even once it settled (after a session the server
+  ended, only if it names that session's user again). It shows, pending
+  and then its answer or error, while no hello is held under the same
+  credentials, and once one is, only to that user: one the hello did not
+  make anyone's (another user's cookie after the session ended) shows to
+  nobody. New credentials hide it. A
   call that itself switches the user (an anonymous sign-in or sign-up,
   then `setAuth`) hides its result once the new hello arrives: act on it
   in `onSuccess`.

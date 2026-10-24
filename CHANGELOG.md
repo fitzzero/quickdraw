@@ -227,8 +227,8 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   included (its `isPending`, then the error its dropped socket gave it).
   The hook now records who each call runs as when it is issued (the user
   the hello names, `null` for anonymous; with no hello held, the user the
-  next hello names, unless the call settles first), and shows its state
-  only while the connection's hello names that user, else an idle result.
+  next hello names, below), and shows its state only while the
+  connection's hello names that user, else an idle result.
   A reconnect with the same credentials keeps the hello, so a finished
   call stays shown through it; new credentials hide it until their hello,
   which shows it again if it names the same user. `throwOnError` throws
@@ -240,8 +240,9 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   credentials await theirs, after the server ended the session) shows,
   pending and then its answer or error, while none is held under the
   credentials it was made under, then only to the user the next hello
-  makes it (below): one that settled first shows to nobody once a hello
-  names anyone, a cookie's sign-in included, and new credentials hide it.
+  makes it (below), settled or not: a hello that does not make it anyone's
+  (another user's cookie after a session the server ended) shows it to
+  nobody, and new credentials hide it.
   A mutation that switches the user itself (an anonymous sign-in or
   sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
   hello arrives: act on its result in `onSuccess`.
@@ -260,14 +261,16 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   credentials, only a hello naming the same user lets it go out (a
   refreshed token), and under the same ones, a hello naming another user
   (a cookie that changed) stops it. A call made with no hello is the next
-  hello's user's; after a session the server ended, only if that hello
-  names the session's user again, so a cookie that signs someone else in
-  finds it nobody's: neither shown nor sent once a hello names anyone,
-  like one that settled before any hello. A stopped call
-  fails `CANCELLED`, never sent, before its optimistic update runs: "The
-  user changed before the call was sent" when a hello names someone else,
-  "The credentials changed before the call was sent" or "The session ended
-  before the call was sent" while no hello names its user yet. `onError`
+  hello's user's, even once it settled (so a refused item's `retry()` is
+  theirs), if that hello comes under the same credentials; after a session
+  the server ended, only if it names the session's user again, so a
+  cookie that signs someone else in finds it nobody's: neither shown nor
+  sent once a hello names anyone. A stopped call fails `CANCELLED`, never
+  sent, before its optimistic update runs: "The user changed before the
+  call was sent" when a hello names someone it was not made as, else "The
+  credentials changed before the call was sent" or "The session ended
+  before the call was sent" (made under other credentials, or before a
+  session the server ended, and no hello names its user since). `onError`
   and `onSettled` run, `mutateAsync` rejects, and the hook's `retry` is
   not asked about it. A refused item's `retry()` keeps the call's own
   user, and a retry stopped so shows the item in `refused` again, with

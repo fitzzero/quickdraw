@@ -12,7 +12,8 @@
 //   the user's whom the next hello under the same epoch names: after a
 //   session the server ended, only if that hello names the user whose
 //   session it was (`endedSessionOf`), signed in again as a cookie would.
-//   One that settles first, whose epoch changes first, or whose next hello
+//   It stays so if it settles first (a refused item's `retry()` then sends
+//   it as that user). One whose epoch changes first, or whose next hello
 //   names another user than the ended session's, is nobody's.
 // - Sent: TanStack runs a mutation's function late (after `onMutate`, a
 //   pause while offline, a `scope` queue) and again for each retry, and a
@@ -53,8 +54,6 @@ export interface Ticket {
   user(): string | null | undefined;
   /** True while a call issued with no hello awaits the hello that will name its user. */
   waiting(): boolean;
-  /** The call settled: if no hello named its user yet, none will. */
-  settled(): void;
 }
 
 /** The ticket of a call issued on `connection` now. */
@@ -63,15 +62,11 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
   const { hello } = connection.getState();
   if (hello !== null) {
     const userId = userOf(hello);
-    return Object.freeze({
-      epoch,
-      user: () => userId,
-      waiting: () => false,
-      settled: () => undefined,
-    });
+    return Object.freeze({ epoch, user: () => userId, waiting: () => false });
   }
-  // No hello: the call waits for the next socket, and is the user's its hello names; after a
-  // session the server ended, only if it names that session's user again.
+  // No hello: the call waits for the next socket, and is the user's its hello names, settled or
+  // not (its refused item's retry() is theirs); after a session the server ended, only if it
+  // names that session's user again.
   const ended = endedSessionOf(connection)?.hello ?? null;
   let userId: string | null | undefined;
   let waiting = true;
@@ -88,17 +83,7 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
       stop();
     }
   });
-  return Object.freeze({
-    epoch,
-    user: () => userId,
-    waiting: () => waiting,
-    settled(): void {
-      if (waiting) {
-        waiting = false;
-        stop();
-      }
-    },
-  });
+  return Object.freeze({ epoch, user: () => userId, waiting: () => waiting });
 }
 
 /**
@@ -139,16 +124,26 @@ export function isUserChange(error: unknown): error is QuickdrawError {
 }
 
 /**
- * The refusal of a call that may not be sent on `connection` now, `CANCELLED`
- * as for a call new credentials found waiting to be sent: a hello names a
- * user it is not made as; or none does yet, under other credentials or
- * after a session the server ended; or the hook holds no ticket for it.
+ * The refusal of the call that `stopped`, a ticket it was made with, keeps
+ * from being sent on `connection` now: `CANCELLED`, as for a call new
+ * credentials found waiting to be sent. Its words say why: a hello names a
+ * user it is not made as (under its own credentials, for a call no hello
+ * made anyone's); or it was made under other credentials, or before a
+ * session the server ended, and no hello names its user since; or the hook
+ * holds no ticket for it.
  */
-function refusalOn(connection: QuickdrawConnection, ticketed: boolean): QuickdrawError {
+function refusalOn(connection: QuickdrawConnection, stopped: Ticket | undefined): QuickdrawError {
+  const { hello } = connection.getState();
+  const user = stopped?.user();
+  const otherUser =
+    hello !== null &&
+    (user === undefined
+      ? stopped?.epoch === credentialsEpochOf(connection)
+      : userOf(hello) !== user);
   let message = "The user changed before the call was sent";
-  if (!ticketed) {
+  if (stopped === undefined) {
     message = "The call was not sent: nothing says which user made it";
-  } else if (connection.getState().hello === null) {
+  } else if (!otherUser) {
     message =
       endedSessionOf(connection) === undefined
         ? "The credentials changed before the call was sent"
@@ -175,10 +170,11 @@ export function checkedTicket(
   const [ticket] = held;
   const { hello } = connection.getState();
   const epoch = credentialsEpochOf(connection);
-  if (ticket !== undefined && held.every((each) => sendable(each, hello, epoch))) {
+  const stopped = held.find((each) => !sendable(each, hello, epoch));
+  if (ticket !== undefined && stopped === undefined) {
     return ticket;
   }
-  throw refusalOn(connection, ticket !== undefined);
+  throw refusalOn(connection, stopped);
 }
 
 /**

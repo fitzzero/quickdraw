@@ -160,9 +160,15 @@ interface IssuedCalls<Output, Variables, Context> {
 /**
  * Runs `start`, TanStack's `mutate`, which adds the call's mutation to the
  * cache before it returns, and calls `onDead` if that mutation leaves the
- * cache while paused, or pauses once out of it (`queryClient.clear()` with
- * the call offline or queued in its scope): TanStack never runs it again,
- * so it never settles. One removed while it runs still settles.
+ * cache while its retryer is paused, or its retryer pauses once it is out
+ * (`queryClient.clear()` with the call offline or queued in its scope):
+ * TanStack resumes only the paused mutations its cache holds, so it never
+ * runs again, and never settles. Paused means the retryer's own `pause`,
+ * not the state's `isPaused`, which a call made offline or queued already
+ * has while its `onMutate` runs: one removed then, or while it runs, still
+ * runs, and settles. Under a nested `QueryClientProvider`, whose client
+ * `useMutation` takes, the mutation is not found here: the ticket is let go
+ * only when the call settles, as before.
  */
 async function untilDead<T>(
   queryClient: QueryClient,
@@ -172,12 +178,18 @@ async function untilDead<T>(
   let starting = true;
   let made: MutationCacheNotifyEvent["mutation"] | undefined;
   let removed = false;
+  let paused = false;
   const stop = queryClient.getMutationCache().subscribe((event) => {
     if (starting && made === undefined && event.type === "added") {
       made = event.mutation;
     } else if (made !== undefined && event.mutation === made) {
       removed ||= event.type === "removed";
-      if (removed && made.state.isPaused) {
+      if (event.type === "updated" && event.action.type === "pause") {
+        paused = true;
+      } else if (event.type === "updated" && event.action.type === "continue") {
+        paused = false;
+      }
+      if (removed && paused) {
         stop();
         onDead();
       }
@@ -213,14 +225,14 @@ function useIssuedCalls<Output, Variables, Context>(
     ): Promise<Output> => {
       issued.current = ticket;
       const release = tickets.hold(variables, ticket);
-      const done = (): void => {
-        release();
-        ticket.settled();
-      };
       try {
-        return await untilDead(queryClient, async () => await run(variables, mutateOptions), done);
+        return await untilDead(
+          queryClient,
+          async () => await run(variables, mutateOptions),
+          release,
+        );
       } finally {
-        done();
+        release();
       }
     },
     [queryClient, run, tickets, issued],
