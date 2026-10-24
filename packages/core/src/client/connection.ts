@@ -22,8 +22,8 @@
 //   revoked, expired, or a flooded channel) and a connect or reconnect
 //   refused with `UNAUTHENTICATED` or `FORBIDDEN` (its `authenticate`
 //   refused the credentials, or the handshake was forbidden) forget the
-//   hello and the grants, and such a refusal fails the calls waiting in the
-//   send buffer with `CANCELLED`; the cache session empties every cache,
+//   hello and the grants, and such a refusal fails the calls held for the
+//   socket's hello with `CANCELLED`; the cache session empties every cache,
 //   data a server render prefetched included (`session.ts`). A dropped
 //   transport, a `qd:rotate`, another protocol or an `INTERNAL` refusal
 //   keeps everything.
@@ -46,9 +46,15 @@
 //   a call joins it: `onHello` listeners hear each one (and the current one
 //   when they start listening), to run their joining calls again
 //   (`useJoin`).
-// - New credentials (`setAuth`) fail the calls waiting in Socket.IO's send
-//   buffer with `CANCELLED` before reconnecting: Socket.IO would send them
-//   on the next connect, as the new user.
+// - A call goes out only on a confirmed socket: connected, and its own
+//   `qd:hello` arrived, since a socket speaks for whoever its credentials
+//   named when it connected, which a session cookie can change unseen. From
+//   a connect or a drop until that hello the connection holds calls itself,
+//   never in Socket.IO's send buffer (`CallHold`, `socket.ts`), and the
+//   hello lets each go or refuses it, oldest first, before it does anything
+//   else (`call.ts`). New credentials (`setAuth`), `close` and a session
+//   refused fail the calls held with `CANCELLED`, as Socket.IO's buffer
+//   would have sent them on the next connect, as whoever it then names.
 // - Subscription events (`qd:sub`, `qd:col:sub`, `qd:col:items`,
 //   `qd:watch`) go through the connection's lane (`lane.ts`), paced by the
 //   server's `limits.subscriptions`.
@@ -77,10 +83,17 @@ import { createBackoff, type Backoff, type BackoffKind, type BackoffWindows } fr
 import { createSubscriptionLane, type SubscriptionLane } from "./lane";
 import { reloadOncePerSession } from "./reload";
 import { createRetry, type Retry } from "./retry";
-import { createSocket, type QuickdrawSocket, type SocketClientOptions } from "./socket";
+import {
+  createCallHold,
+  createSocket,
+  type CallHold,
+  type HeldCall,
+  type QuickdrawSocket,
+  type SocketClientOptions,
+} from "./socket";
 import { createTopics, notifyEach, type JoinWait, type Topics, type TopicWatch } from "./watch";
 
-export type { QuickdrawSocket, SocketClientOptions };
+export type { CallHold, HeldCall, QuickdrawSocket, SocketClientOptions };
 
 /**
  * The credentials a connection authenticates with: a token, sent as
@@ -156,8 +169,8 @@ export interface ConnectionState {
    * True while the connection is `connecting` again after it was connected
    * with its current credentials: the socket dropped, the server asked it to
    * rotate, or the server could not authenticate a reconnect (`INTERNAL`).
-   * Queries keep running meanwhile (their calls wait in the send buffer);
-   * `setAuth` and `close` end it.
+   * Queries keep running meanwhile (their calls are held until the new
+   * socket's hello); `setAuth` and `close` end it.
    */
   readonly reconnecting: boolean;
   /**
@@ -204,8 +217,8 @@ export interface QuickdrawConnection {
   open(): void;
   /**
    * Disconnects and stays idle until `open`. Calls in flight fail; calls
-   * still waiting in Socket.IO's send buffer fail with `CANCELLED`. No timer
-   * of the connection's is left running.
+   * still held for the socket's hello fail with `CANCELLED`. No timer of the
+   * connection's is left running.
    */
   close(): void;
   /**
@@ -218,10 +231,10 @@ export interface QuickdrawConnection {
   /**
    * Changes the credentials. When they differ from the current ones
    * (compared by value as they are sent: a token string is the same as
-   * `{ token }` with that value), the calls still waiting in Socket.IO's send
-   * buffer fail with `CANCELLED` (they were made as the last credentials,
-   * and would be sent as the new ones), an open connection reconnects with
-   * the new credentials, and this returns true.
+   * `{ token }` with that value), the calls still held for the socket's
+   * hello fail with `CANCELLED` (they were made as the last credentials, and
+   * would be sent as the new ones), an open connection reconnects with the
+   * new credentials, and this returns true.
    */
   setAuth(auth: ConnectionAuth): boolean;
   /** A call id, unique among this connection's calls in flight. */
@@ -341,30 +354,6 @@ function authKey(auth: ConnectionAuth): string {
   return JSON.stringify(credentialsOf(auth), sorted);
 }
 
-/** An acknowledgement as Socket.IO keeps it: `withError` when it takes an error first (`timeout`). */
-type Ack = ((...args: unknown[]) => void) & { readonly withError?: boolean };
-
-/**
- * Fails every packet waiting in Socket.IO's send buffer with `error` and
- * empties the buffer. Socket.IO sends that buffer on the next connect,
- * whatever credentials the socket then carries, so a call made as one user
- * would run as the next.
- */
-function failBuffered(socket: QuickdrawSocket, error: Error): void {
-  const buffered = socket.sendBuffer.splice(0);
-  const { acks } = socket as unknown as { readonly acks: Record<string, Ack | undefined> };
-  for (const packet of buffered) {
-    const id = packet.id === undefined ? undefined : String(packet.id);
-    const ack = id === undefined ? undefined : acks[id];
-    if (id !== undefined && ack !== undefined) {
-      Reflect.deleteProperty(acks, id);
-      if (ack.withError === true) {
-        ack.call(socket, error);
-      }
-    }
-  }
-}
-
 /**
  * True for the reason Socket.IO gives a disconnect the server made
  * (`socket.disconnect(true)`: signed out everywhere, revoked, expired, a
@@ -379,8 +368,8 @@ export function isServerDisconnect(reason: unknown): boolean {
  * True while `connection`'s socket will connect unless the app closes it:
  * Socket.IO reconnects it (`socket.active`), or the connection waits to
  * connect it again because the server could not authenticate it (its
- * socket inactive, its status `connecting`). Calls made meanwhile wait in
- * the send buffer, and reads wait for the hello.
+ * socket inactive, its status `connecting`). Calls made meanwhile are held
+ * for the socket's hello (`callHoldOf`), and reads wait for the hello.
  */
 export function mayConnect(connection: Pick<QuickdrawConnection, "socket" | "getState">): boolean {
   return connection.socket.active || connection.getState().status === "connecting";
@@ -388,6 +377,27 @@ export function mayConnect(connection: Pick<QuickdrawConnection, "socket" | "get
 
 /** The session of each connection `createQuickdrawConnection` made, for `credentialsEpochOf`. */
 const sessions = new WeakMap<QuickdrawConnection, Session>();
+
+/** A new connection's session: never connected, under epoch 0, holding nothing. */
+function newSession(
+  socket: QuickdrawSocket,
+  topics: Topics,
+  lane: SubscriptionLane,
+  retry: Retry,
+): Session {
+  return { established: false, epoch: 0, hold: createCallHold(socket), topics, lane, retry };
+}
+
+/**
+ * The calls `connection` holds until its socket is confirmed (connected,
+ * and its own `qd:hello` arrived), and whether it is: its next hello tells
+ * them before it does anything else, and new credentials, `close` and a
+ * session refused fail them (`call.ts`). `undefined` for a connection made
+ * elsewhere (a mock's), which holds nothing.
+ */
+export function callHoldOf(connection: QuickdrawConnection): CallHold | undefined {
+  return sessions.get(connection)?.hold;
+}
 
 /** `connection`, frozen, with its session recorded for `credentialsEpochOf`. */
 function registered(session: Session, connection: QuickdrawConnection): QuickdrawConnection {
@@ -507,6 +517,8 @@ interface Session {
   epoch: number;
   /** Set while the epoch began with the server ending a session (`endedSessionOf`). */
   ended?: { readonly hello: HelloFrame | null } | undefined;
+  /** The calls held until the socket's own hello confirms it (`callHoldOf`). */
+  readonly hold: CallHold;
   readonly topics: Topics;
   readonly lane: SubscriptionLane;
   readonly retry: Retry;
@@ -573,8 +585,7 @@ function createLifecycle(
     rotateTimer = undefined;
     backoff.clear();
     // A call waiting to be sent would go out on the next `open`, long after the app closed.
-    failBuffered(
-      socket,
+    session.hold.fail(
       new QuickdrawError("CANCELLED", "The connection closed before the call was sent"),
     );
     socket.disconnect();
@@ -677,6 +688,8 @@ function listenForHellos(
 function listenToSocket(wiring: Wiring): void {
   const { socket, store, lifecycle, session } = wiring;
   socket.on("connect", () => {
+    // A new socket: whom the server takes it for is known once its own hello arrives.
+    session.hold.unconfirm();
     const again = session.established;
     session.established = true;
     session.retry.connected();
@@ -689,6 +702,7 @@ function listenToSocket(wiring: Wiring): void {
     }
   });
   socket.on("disconnect", (reason: unknown) => {
+    session.hold.unconfirm();
     const status = socket.active ? "connecting" : lifecycle.stoppedStatus();
     // The server ended the session: who it was is no longer known.
     const ended = isServerDisconnect(reason);
@@ -716,9 +730,8 @@ function listenToSocket(wiring: Wiring): void {
     const ended = isSessionRefusal(error.data);
     if (ended) {
       endSession(session, store.get().hello);
-      // Socket.IO would send them on the next connect, as whoever the credentials then name.
-      failBuffered(
-        socket,
+      // They would go out on the next connect, as whoever the credentials then name.
+      session.hold.fail(
         new QuickdrawError("CANCELLED", "The session ended before the call was sent"),
       );
     }
@@ -736,8 +749,10 @@ function listenToSocket(wiring: Wiring): void {
 
 /** The pushes a server sends the whole connection. */
 function listenToPushes(wiring: Wiring): void {
-  const { socket, store, lifecycle } = wiring;
+  const { socket, store, lifecycle, session } = wiring;
   socket.on(SERVER_EVENTS.hello, (frame) => {
+    // The calls held for it go first (or are refused), before anything the hello sets off.
+    session.hold.confirm(frame);
     const grants = isRecord(frame) && isRecord(frame.serviceAccess) ? frame.serviceAccess : null;
     store.set({ hello: frame, serviceAccess: grants as HelloFrame["serviceAccess"] | null });
     notifyEach(wiring.hellos, (entry) => {
@@ -794,7 +809,7 @@ export function createQuickdrawConnection(
   });
   // Retries run while the connection is trying to connect: `close` makes it idle.
   const retry = createRetry(socket, () => store.get().status === "connecting");
-  const session: Session = { established: false, epoch: 0, topics, lane: subscriptionLane, retry };
+  const session = newSession(socket, topics, subscriptionLane, retry);
   const lifecycle = createLifecycle(socket, store, backoff, session);
   const reconnected = new Set<() => void>();
   const wiring: Wiring = {
@@ -828,8 +843,7 @@ export function createQuickdrawConnection(
       auth = next;
       renewSession(session);
       retry.stop();
-      failBuffered(
-        socket,
+      session.hold.fail(
         new QuickdrawError("CANCELLED", "The credentials changed before the call was sent"),
       );
       store.set({ hello: null, serviceAccess: null });

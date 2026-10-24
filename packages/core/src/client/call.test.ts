@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { ERROR_CODES, QuickdrawError } from "../index";
 import { deferred } from "../server/__tests__/fixtures";
 import { call, callData, isNotModified, isUnknownOutcome, shouldRetry } from "./call";
+import { callHoldOf } from "./connection";
 import { clientHarness, outgoing, testAuth, until, whenStatus } from "./__tests__/fixtures";
 
 const harness = clientHarness();
@@ -86,7 +87,7 @@ describe("call", () => {
     expect(cancel).toEqual({ id: envelope.id });
   });
 
-  it("rejects an aborted call before sending it, and drops a buffered one unsent", async () => {
+  it("rejects an aborted call before sending it, and drops a held one unsent", async () => {
     const { app, probe, records } = await harness.start();
     const connection = harness.connection(app.url);
     const sent = outgoing(connection);
@@ -99,16 +100,18 @@ describe("call", () => {
     expect((await failure(early)).code).toBe("CANCELLED");
     connection.open();
     const controller = new AbortController();
+    // Made before the socket's hello: the connection holds it, and Socket.IO's buffer stays empty.
     const buffered = call(connection, {
       service: "probeService",
       method: "wait",
       input: { key: "buffered" },
       signal: controller.signal,
     });
-    expect(connection.socket.sendBuffer).toHaveLength(1);
+    expect(callHoldOf(connection)?.size).toBe(1);
+    expect(connection.socket.sendBuffer).toHaveLength(0);
     controller.abort();
     expect((await failure(buffered)).code).toBe("CANCELLED");
-    expect(connection.socket.sendBuffer).toHaveLength(0);
+    expect(callHoldOf(connection)?.size).toBe(0);
     await whenStatus(connection, "connected");
     expect(await callData(connection, { service: "counterService", method: "total" })).toBe(0);
     expect(probe.signals.has("buffered")).toBe(false);
@@ -189,7 +192,7 @@ describe("call", () => {
     });
     const connection = harness.connection(app.url);
     connection.open();
-    // In Socket.IO's send buffer until its time runs out, then dropped from it, unsent.
+    // Held for the socket's hello until its time runs out, then dropped, unsent.
     const unsent = await failure(
       call(connection, { service: "counterService", method: "total", timeoutMs: 1 }),
     );

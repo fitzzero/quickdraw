@@ -8,7 +8,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 import type { QuickdrawConnection } from "../connection";
 import { serverStateOf, useAwaitingHello, useHello, useQuickdrawContext } from "../context";
-import { isUserChange } from "../issuer";
+import { isCheckRefusal } from "../issuer";
 import type { QuickdrawError } from "../../protocol/errors";
 import {
   NO_OVERLAYS,
@@ -153,7 +153,7 @@ function refusedItems(
         if (
           held &&
           refusal !== undefined &&
-          isUserChange(again) &&
+          isCheckRefusal(again) &&
           store.generation() === generation
         ) {
           const back = store.addItem(service, collection, scope, addition.item, true);

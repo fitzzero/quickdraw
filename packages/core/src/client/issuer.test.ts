@@ -26,6 +26,7 @@ function helloConnection(hello: HelloFrame | null) {
   const listeners = new Set<(next: HelloFrame) => void>();
   const connection = {
     getState: () => ({ hello: held }),
+    subscribe: () => () => undefined,
     onHello(listener: (next: HelloFrame) => void): () => void {
       listeners.add(listener);
       return () => {
@@ -50,7 +51,7 @@ function helloConnection(hello: HelloFrame | null) {
 
 /** A ticket made as `user` under `epoch`; `waiting` while a call made with no hello awaits its own. */
 function ticket(user: string | null | undefined, epoch = 0, waiting = false): Ticket {
-  return { epoch, user: () => user, waiting: () => waiting };
+  return { epoch, user: () => user, waiting: () => waiting, hear: () => undefined };
 }
 
 /** The error `run` throws. */

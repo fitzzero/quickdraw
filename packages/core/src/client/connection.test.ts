@@ -16,6 +16,7 @@ import {
   createQuickdrawConnection,
   credentialsEpochOf,
   endedSessionOf,
+  callHoldOf,
   isServerDisconnect,
   isSessionRefusal,
   type ConnectionState,
@@ -189,7 +190,7 @@ describe("createQuickdrawConnection", () => {
     });
   });
 
-  it("forgets the hello and fails the calls it buffered when a reconnect is refused (CLIENT-1)", async () => {
+  it("forgets the hello and fails the calls it held when a reconnect is refused (CLIENT-1)", async () => {
     let revoked = false;
     const { app } = await harness.start({
       auth: {
@@ -222,7 +223,11 @@ describe("createQuickdrawConnection", () => {
     expect(credentialsEpochOf(connection)).toBe(1);
     // The hello held through the drop says whose session the refusal ended.
     expect(endedSessionOf(connection)?.hello?.userId).toBe(alice.userId);
-    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(pending).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "The session ended before the call was sent",
+    });
+    expect(callHoldOf(connection)?.size).toBe(0);
     // Refused again with no hello between: the session ended is still Alice's.
     connection.open();
     await until(() => credentialsEpochOf(connection) === 2);
@@ -241,7 +246,7 @@ describe("createQuickdrawConnection", () => {
     server.fail(2);
     server.drop();
     await until(() => connection.getState().reconnecting);
-    // A call made meanwhile waits in the send buffer, and goes out once the connection is back.
+    // A call made meanwhile is held, and goes out once the connection is back, at its hello.
     const pending = caller(connection);
     await until(() => server.handshakes() === before + 3);
     await whenStatus(connection, "connected");
@@ -425,11 +430,11 @@ describe("createQuickdrawConnection", () => {
     expect(await caller(connection)).toBe("dave");
   });
 
-  it("fails a call buffered while offline with CANCELLED when the credentials change, and never sends it", async () => {
+  it("fails a call held while offline with CANCELLED when the credentials change, and never sends it", async () => {
     const { app, records, counter: counterService } = await harness.start();
     const connection = await harness.connect(app.url, { auth: { principal: alice } });
     await until(() => connection.getState().hello?.userId === alice.userId);
-    // A network outage: Socket.IO keeps the socket active and buffers emits.
+    // A network outage: Socket.IO keeps the socket active, and the connection holds the calls.
     const manager = connection.socket.io;
     manager.reconnection(false);
     manager.engine.close();
@@ -440,19 +445,23 @@ describe("createQuickdrawConnection", () => {
       input: { name: "offline" },
       kind: "mutation",
     });
-    expect(connection.socket.sendBuffer).toHaveLength(1);
+    expect(callHoldOf(connection)?.size).toBe(1);
+    expect(connection.socket.sendBuffer).toEqual([]);
     // Alice signs out and Bob signs in on the same tab before the network is back.
     manager.reconnection(true);
     connection.setAuth({ principal: bob });
-    await expect(bump).rejects.toMatchObject({ code: "CANCELLED" });
-    expect(connection.socket.sendBuffer).toEqual([]);
+    await expect(bump).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "The credentials changed before the call was sent",
+    });
+    expect(callHoldOf(connection)?.size).toBe(0);
     await until(() => connection.getState().hello?.userId === bob.userId);
     expect(await caller(connection)).toBe(bob.userId);
     expect(records.filter((record) => record.method === "bump")).toEqual([]);
     expect(counterService.values.get("offline")).toBeUndefined();
   });
 
-  it("fails a call waiting in the send buffer with CANCELLED when it closes", async () => {
+  it("fails a call held for the socket's hello with CANCELLED when it closes", async () => {
     const { app, records } = await harness.start();
     const connection = await harness.connect(app.url);
     const manager = connection.socket.io;
@@ -465,10 +474,13 @@ describe("createQuickdrawConnection", () => {
       input: { name: "closed" },
       kind: "mutation",
     });
-    expect(connection.socket.sendBuffer).toHaveLength(1);
+    expect(callHoldOf(connection)?.size).toBe(1);
     connection.close();
-    await expect(bump).rejects.toMatchObject({ code: "CANCELLED" });
-    expect(connection.socket.sendBuffer).toEqual([]);
+    await expect(bump).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "The connection closed before the call was sent",
+    });
+    expect(callHoldOf(connection)?.size).toBe(0);
     manager.reconnection(true);
     connection.open();
     await whenStatus(connection, "connected");
