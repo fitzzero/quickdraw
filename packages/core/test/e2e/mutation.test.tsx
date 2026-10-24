@@ -5,7 +5,7 @@
 // its new card at once (`cache.addItem`), flagged pending, and becomes the
 // server's own card with no gap and no second copy, or goes when refused.
 
-import { fireEvent, waitFor } from "@testing-library/react";
+import { act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createQuickdrawClient, overlaysOf, type CollectionEntry } from "../../src/client/index";
 import { renderWithQuickdraw } from "../../src/testing/client";
@@ -294,6 +294,63 @@ function LoggedBoard({ projectId, log }: { readonly projectId: string; readonly 
 }
 
 describe("an optimistic create with onRefused: keep (finding F6.4)", () => {
+  it("refuses a refused card's retry() made after a switch of users, never sending it as the next", async () => {
+    const { app } = await e2e.start();
+    const board = e2e.board();
+    // The card's retry(), as an app may hold it past the render that offered it.
+    const held: { retry?: () => Promise<void> } = {};
+    function HeldRetry() {
+      const { refused } = qd.task.board.useCollection(board.p1);
+      const create = qd.task.create.useMutation({
+        optimistic: (input, cache) =>
+          cache.addItem(
+            "board",
+            input.projectId,
+            {
+              projectId: input.projectId,
+              title: input.title,
+              status: "open",
+              ordinal: 99,
+              assigneeId: null,
+            },
+            { onRefused: "keep" },
+          ),
+      });
+      held.retry ??= refused[0]?.retry;
+      return (
+        <>
+          <p>{`mutation ${create.status} ${create.error?.code ?? "-"}`}</p>
+          <button
+            type="button"
+            onClick={() => create.mutate({ projectId: board.p1, title: "First" })}
+          >
+            add First
+          </button>
+        </>
+      );
+    }
+    // Di reads P1 through its access list, and may not create there.
+    const view = await renderWithQuickdraw(<HeldRetry />, { app, as: as(board.di), client: qd });
+    await view.findByText("mutation idle -");
+    fireEvent.click(view.getByText("add First"));
+    await view.findByText("mutation error FORBIDDEN");
+    expect(held.retry).toBeDefined();
+    // Bo may create in P1: Di's card sent again as Bo would be Bo's write.
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.bo) });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    await waitFor(() => {
+      expect(view.connection.getState().hello?.userId).toBe(board.bo);
+    });
+    await act(async () => {
+      await held.retry?.();
+    });
+    expect(await e2e.prisma().task.findFirst({ where: { title: "First" } })).toBeNull();
+  });
+
   it("shows a refused card in the render that shows the error, and retries through the mutation (finding F8.3)", async () => {
     const { app } = await e2e.start();
     const board = e2e.board();

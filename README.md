@@ -1804,20 +1804,26 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `optimistic: (input, cache) => ...` writes its own layers with
   `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
   `addItem` and `addEntity` (below).
+- A mutation hook's call is bound, as it is made, to the user it is made as
+  and to the credentials it is made under. Its request goes out only as
+  that user: one whose user changed before it was sent (`setAuth` in the
+  same handler, an async `onMutate`, a pause while offline, a `scope`
+  queue, a retry) fails `CANCELLED`, is never sent as the next user, and is
+  not retried; new credentials for the same user send it once their hello
+  names them. A refused item's `retry()` sends again as the user who made
+  the call.
 - A mutation hook shows a call (its `data`, `error`, `variables` and
-  status) only while the server's hello names the user the call ran as. A
-  component that stays mounted while the user changes shows the next user
-  none of the last user's calls, finished or in flight, and none while new
-  credentials await their hello; the same user's shows again once their
-  hello arrives, and stays through a reconnect. `throwOnError` throws only
-  such an error. The call still settles, and its callbacks still run, for
-  the user who made it. A call made while no hello is held (before the
-  first, while new credentials await theirs, after the server ended the
-  session) runs as the user the next hello names, and shows idle
-  (`isPending` false) until then; one that fails before any hello (no
-  socket to send it on) is never shown nor thrown, so handle such failures
-  in `onError`. Under an `AuthGate` (children render only while `isKnown`)
-  such calls do not arise. A call that itself switches the user (an
+  status) only to the user it is made as, while the server's hello names
+  them. A component that stays mounted while the user changes shows the
+  next user none of the last user's calls, finished or in flight, and none
+  while new credentials await their hello; the same user's shows again
+  once their hello arrives, and stays through a reconnect. `throwOnError`
+  throws only such an error. The call still settles, and its callbacks
+  still run, for the user who made it. A call made while no hello is held
+  (before the first, while new credentials await theirs, after the server
+  ended the session) shows to whoever views it under the same credentials,
+  pending and then its answer or error, and runs as the user the next hello
+  names; new credentials hide it. A call that itself switches the user (an
   anonymous sign-in or sign-up, then `setAuth`) hides its result once the
   new hello arrives: act on it in `onSuccess`.
 - Live rows and collections need no refetching: frames keep them current,
@@ -1856,7 +1862,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
   `useCollection` and a search's held scope show nothing of another row,
   scope or user while a new id, scope or user loads. A mounted mutation
-  hook shows the next user none of the last user's calls (above).
+  hook shows the next user none of the last user's calls, nor sends them as
+  the next user (above).
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.

@@ -12,29 +12,50 @@
 // issuing its mutation more than 5 times within a second is named as a
 // loop, with its component (`loopGuard.ts`).
 //
-// The result shows a call's `data`, `error`, `variables` and status only
-// while the connection's hello names the user the call ran as (`issuer.ts`),
-// so a hook that stays mounted across a switch of users shows the next user
-// none of the last user's calls, finished or in flight, and nothing while
-// new credentials await their hello; `throwOnError` throws only an error it
-// shows. Nothing else changes: the call still settles, and its callbacks
-// still run, for the user who made it. The observer is not reset, which
-// would drop the callbacks `mutate(variables, { onSuccess })` gave a call
-// still in flight.
+// Each call carries a ticket from the moment it is issued (`issuer.ts`):
+// the user it is made as, and the credentials epoch it is made under. The
+// hook keeps it by the call's `variables`, and checks it at the start of
+// every attempt, before anything else: TanStack runs the mutation function
+// late (after `onMutate`, a pause offline, a `scope` queue) and again for a
+// retry, and the call goes out as whoever the socket then speaks for. One
+// whose user changed meanwhile fails `CANCELLED`, never sent, and is not
+// retried; a refused item's `retry()` keeps the ticket of the call it sends
+// again.
+//
+// The result shows a call's `data`, `error`, `variables` and status only to
+// the user it is made as, while a hello names them, or, for a call made
+// with no hello, to whoever views it under the credentials it was made
+// under: a hook that stays mounted across a switch of users shows the next
+// user none of the last user's calls, finished or in flight, and nothing
+// while new credentials await their hello; `throwOnError` throws only an
+// error it shows. Nothing else changes: the call still settles, and its
+// callbacks still run, for the user who made it. The observer is not reset,
+// which would drop the callbacks `mutate(variables, { onSuccess })` gave a
+// call still in flight.
 
 import {
   useMutation,
+  type MutateOptions,
   type QueryClient,
   type UseMutateAsyncFunction,
   type UseMutateFunction,
   type UseMutationOptions,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { QuickdrawError } from "../protocol/errors";
 import { callData, isNotModified } from "./call";
-import { useHello, useQuickdrawContext } from "./context";
-import { issuerOf, shownTo, type Issuer } from "./issuer";
+import { useCredentialsEpoch, useHello, useQuickdrawContext } from "./context";
+import {
+  checkedTicket,
+  createTickets,
+  isUserChange,
+  shownOn,
+  shownTo,
+  ticketOf,
+  type Ticket,
+  type Tickets,
+} from "./issuer";
 import { methodKeyPrefix } from "./keys";
 import { createMutationTrace, loopGuardOf, type MutationTrace } from "./loopGuard";
 import type { MethodTarget } from "./members";
@@ -104,31 +125,63 @@ function throwShownOnly<Output, Variables, Context>(
 }
 
 /**
- * TanStack's `mutate` and `mutateAsync`, recording who each call runs as
- * (`issue`) in `issued` as it is made: the state the hook then holds is that
- * call's.
+ * `retry` as TanStack would read it for these options (their own, else the
+ * `QueryClient`'s defaults, else none), never for a call refused because
+ * its user changed (`isUserChange`): every attempt of it is refused alike.
+ */
+function retryUnlessUserChanged<Output, Variables, Context>(
+  queryClient: QueryClient,
+  options: UseMutationOptions<Output, QuickdrawError, Variables, Context>,
+): (failureCount: number, error: QuickdrawError) => boolean {
+  const retry = queryClient.defaultMutationOptions(options).retry ?? 0;
+  return (failureCount, error) =>
+    !isUserChange(error) &&
+    (retry === true ||
+      (typeof retry === "number" && failureCount < retry) ||
+      (typeof retry === "function" && retry(failureCount, error)));
+}
+
+/** A hook's own calls: TanStack's, each made with a ticket the hook keeps beside it. */
+interface IssuedCalls<Output, Variables, Context> {
+  readonly mutate: UseMutateFunction<Output, QuickdrawError, Variables, Context>;
+  readonly mutateAsync: UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>;
+  /** Makes the call with `ticket`, the one an earlier call was issued with (a refused item's `retry()`). */
+  readonly sendAs: (variables: Variables, ticket: Ticket) => Promise<Output>;
+}
+
+/**
+ * TanStack's `mutate` and `mutateAsync`, each call issued with a ticket
+ * (`issue`) kept in `tickets` by its variables until it settles, and in
+ * `issued`: the state the hook then holds is that call's.
  */
 function useIssuedCalls<Output, Variables, Context>(
   run: UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>,
-  issue: () => Issuer,
-  issued: { current: Issuer | undefined },
-): {
-  readonly mutate: UseMutateFunction<Output, QuickdrawError, Variables, Context>;
-  readonly mutateAsync: UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>;
-} {
-  const mutateAsync = useCallback<
-    UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>
-  >(
-    async (variables, mutateOptions) => {
-      const issuer = issue();
-      issued.current = issuer;
+  issue: () => Ticket,
+  tickets: Tickets,
+  issued: { current: Ticket | undefined },
+): IssuedCalls<Output, Variables, Context> {
+  const send = useCallback(
+    async (
+      variables: Variables,
+      ticket: Ticket,
+      mutateOptions?: MutateOptions<Output, QuickdrawError, Variables, Context>,
+    ): Promise<Output> => {
+      issued.current = ticket;
+      const release = tickets.hold(variables, ticket);
       try {
         return await run(variables, mutateOptions);
       } finally {
-        issuer.settled();
+        release();
+        ticket.settled();
       }
     },
-    [run, issue, issued],
+    [run, tickets, issued],
+  );
+  const mutateAsync = useCallback<
+    UseMutateAsyncFunction<Output, QuickdrawError, Variables, Context>
+  >(
+    async (variables, mutateOptions) => await send(variables, issue(), mutateOptions),
+    [send, issue],
   );
   const mutate = useCallback<UseMutateFunction<Output, QuickdrawError, Variables, Context>>(
     (variables, mutateOptions) => {
@@ -137,7 +190,11 @@ function useIssuedCalls<Output, Variables, Context>(
     },
     [mutateAsync],
   );
-  return { mutate, mutateAsync };
+  const sendAs = useCallback(
+    async (variables: Variables, ticket: Ticket) => await send(variables, ticket),
+    [send],
+  );
+  return { mutate, mutateAsync, sendAs };
 }
 
 /**
@@ -154,6 +211,7 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
     `${target.service}.${target.method}.useMutation`,
   );
   const hello = useHello(connection);
+  const epoch = useCredentialsEpoch(connection);
   // where this hook instance was first rendered, for a loop warning (development only)
   const traced = useRef<MutationTrace>(undefined);
   traced.current ??= createMutationTrace();
@@ -165,15 +223,19 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
     collections: target.collections,
   };
   // The hook's own mutate, so a refused item's retry() goes through it (finding F8.3).
-  const resend = useRef<((input: Variables) => Promise<Output>) | undefined>(undefined);
-  // Who the call whose state the hook holds runs as (`issuer.ts`).
-  const issued = useRef<Issuer | undefined>(undefined);
-  const shown = (): boolean => shownTo(issued.current, connection.getState().hello);
+  const resend = useRef<IssuedCalls<Output, Variables, Context>["sendAs"]>(undefined);
+  // The tickets of the calls on their way, and of the call whose state the hook holds.
+  const [tickets] = useState(createTickets);
+  const issued = useRef<Ticket | undefined>(undefined);
+  const shown = (): boolean => shownOn(issued.current, connection);
   const own = { mutationKey: methodKeyPrefix(target.service, target.method), ...rest };
   const mutation = useMutation<Output, QuickdrawError, Variables, Context>({
     ...own,
     throwOnError: throwShownOnly(queryClient, own, shown),
+    retry: retryUnlessUserChanged(queryClient, own),
     mutationFn: (input: Variables) => {
+      // Every attempt, first: refused (`CANCELLED`) once its user changed, never sent as another.
+      const ticket = checkedTicket(tickets, input, connection);
       loopGuardOf(queryClient).mutated(trace, target.service, target.method);
       return mutateOptimistically<Output>(
         queryClient,
@@ -193,7 +255,7 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
             },
           }),
         {
-          resend: async () => await resend.current?.(input),
+          resend: async () => await resend.current?.(input, ticket),
           onFailed: (apply) => {
             applyWhenMutationFails(queryClient, input, apply);
           },
@@ -201,10 +263,10 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
       );
     },
   });
-  const issue = useCallback(() => issuerOf(connection), [connection]);
-  const calls = useIssuedCalls(mutation.mutateAsync, issue, issued);
-  resend.current = calls.mutateAsync;
-  // Only to the user its call ran as, while a hello names them.
-  const result = shownTo(issued.current, hello) ? mutation : nothingOf(mutation);
+  const issue = useCallback(() => ticketOf(connection), [connection]);
+  const { sendAs, ...calls } = useIssuedCalls(mutation.mutateAsync, issue, tickets, issued);
+  resend.current = sendAs;
+  // Only to its user while a hello names them, or under its epoch for a call made with no hello.
+  const result = shownTo(issued.current, hello, epoch) ? mutation : nothingOf(mutation);
   return { ...result, ...calls };
 }

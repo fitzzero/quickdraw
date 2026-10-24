@@ -386,6 +386,36 @@ export function mayConnect(connection: Pick<QuickdrawConnection, "socket" | "get
   return connection.socket.active || connection.getState().status === "connecting";
 }
 
+/** The session of each connection `createQuickdrawConnection` made, for `credentialsEpochOf`. */
+const sessions = new WeakMap<QuickdrawConnection, Session>();
+
+/** `connection`, frozen, with its session recorded for `credentialsEpochOf`. */
+function registered(session: Session, connection: QuickdrawConnection): QuickdrawConnection {
+  const frozen = Object.freeze(connection);
+  sessions.set(frozen, session);
+  return frozen;
+}
+
+/** New credentials: the next connect is a first one, under a new epoch (`credentialsEpochOf`). */
+function renewSession(session: Session): void {
+  session.established = false;
+  session.epoch += 1;
+}
+
+/**
+ * The credentials epoch of `connection`: how many times its credentials
+ * changed (`setAuth` with other ones) or the server ended its session (its
+ * disconnect, or a connect refused for the session). The socket's identity
+ * comes from its credentials, so a call made under one epoch must not be
+ * sent under another unless that one's hello names the same user
+ * (`issuer.ts`). A transport drop, `qd:rotate`, `close` and `open`, and a
+ * refusal the server could not check (`INTERNAL`) keep it. `0` for a
+ * connection made elsewhere (a mock client's).
+ */
+export function credentialsEpochOf(connection: QuickdrawConnection): number {
+  return sessions.get(connection)?.epoch ?? 0;
+}
+
 /**
  * True for the `connect_error` data of a handshake refused for its session:
  * `UNAUTHENTICATED` or `FORBIDDEN`. `INTERNAL` (the server could not check
@@ -444,13 +474,15 @@ function defaultTimeout(option: number | undefined, hello: HelloFrame | null): n
 
 /**
  * Whether the socket has connected with the current credentials since the
- * connection last opened (the next connect is then a reconnect), and the
- * topics, the subscription lane and the retries after a refusal the server
- * could not authenticate (`retry.ts`), which stop retrying and waiting when
- * the connection closes.
+ * connection last opened (the next connect is then a reconnect), the
+ * credentials epoch (`credentialsEpochOf`), and the topics, the
+ * subscription lane and the retries after a refusal the server could not
+ * authenticate (`retry.ts`), which stop retrying and waiting when the
+ * connection closes.
  */
 interface Session {
   established: boolean;
+  epoch: number;
   readonly topics: Topics;
   readonly lane: SubscriptionLane;
   readonly retry: Retry;
@@ -635,8 +667,15 @@ function listenToSocket(wiring: Wiring): void {
   socket.on("disconnect", (reason: unknown) => {
     const status = socket.active ? "connecting" : lifecycle.stoppedStatus();
     // The server ended the session: who it was is no longer known.
-    const ended = isServerDisconnect(reason) ? { hello: null, serviceAccess: null } : {};
-    store.set({ status, reconnecting: status === "connecting" && session.established, ...ended });
+    const ended = isServerDisconnect(reason);
+    if (ended) {
+      session.epoch += 1;
+    }
+    store.set({
+      status,
+      reconnecting: status === "connecting" && session.established,
+      ...(ended ? { hello: null, serviceAccess: null } : {}),
+    });
   });
   socket.on("connect_error", (error: Error & { readonly data?: unknown }) => {
     if (socket.active) {
@@ -652,6 +691,7 @@ function listenToSocket(wiring: Wiring): void {
     session.established = false;
     const ended = isSessionRefusal(error.data);
     if (ended) {
+      session.epoch += 1;
       // Socket.IO would send them on the next connect, as whoever the credentials then name.
       failBuffered(
         socket,
@@ -730,7 +770,7 @@ export function createQuickdrawConnection(
   });
   // Retries run while the connection is trying to connect: `close` makes it idle.
   const retry = createRetry(socket, () => store.get().status === "connecting");
-  const session: Session = { established: false, topics, lane: subscriptionLane, retry };
+  const session: Session = { established: false, epoch: 0, topics, lane: subscriptionLane, retry };
   const lifecycle = createLifecycle(socket, store, backoff, session);
   const reconnected = new Set<() => void>();
   const wiring: Wiring = {
@@ -745,7 +785,7 @@ export function createQuickdrawConnection(
   listenToSocket(wiring);
   listenToPushes(wiring);
 
-  return Object.freeze({
+  return registered(session, {
     url: options.url,
     get timeoutMs(): number {
       return timeoutMs();
@@ -762,7 +802,7 @@ export function createQuickdrawConnection(
         return false;
       }
       auth = next;
-      session.established = false;
+      renewSession(session);
       retry.stop();
       failBuffered(
         socket,

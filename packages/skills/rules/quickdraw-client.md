@@ -129,14 +129,18 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   (`useCollection().checking` names it until the scope's next load says),
   and only that id lets the load find it and makes `retry()` safe, since
   the second call fails `CONFLICT` instead of writing twice.
+- A mutation's call is sent only as the user it was made as: one whose user
+  changed before its request went out (`setAuth` in the same handler, an
+  async `onMutate`, a pause offline, a `scope` queue, a retry) fails
+  `CANCELLED`, never sent as the next user and not retried. Handle it in
+  `onError` like any refusal; new credentials for the same user send it.
 - A mutation's result (`data`, `error`, `variables`, status) shows only
   while the server's hello names the user the call ran as: a component that
   stays mounted while the user changes shows the next user none of the last
   user's calls, and none while new credentials await their hello. Its
   callbacks still run for the user who made it. A call made while no hello
-  is held shows idle until the next hello names its user, and one that
-  fails before any hello is never shown nor thrown: handle that in
-  `onError` (behind an `isKnown` gate it cannot happen).
+  is held shows (pending, then its answer or error) under the credentials
+  it was made with, and new credentials hide it.
 - A mutation that switches the user itself (an anonymous sign-in or
   sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
   hello arrives: act on its result in `onSuccess`, not in render.
