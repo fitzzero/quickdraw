@@ -129,17 +129,21 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   (`useCollection().checking` names it until the scope's next load says),
   and only that id lets the load find it and makes `retry()` safe, since
   the second call fails `CONFLICT` instead of writing twice.
-- A mutation hook checks each attempt of a call before it goes out, so the
-  call is sent only as the user it was made as: one whose user changed
-  first (`setAuth` in the same handler, an async `onMutate`, a pause
-  offline, a `scope` queue, a retry) fails `CANCELLED`, never sent as the
-  next user and not retried. So does an attempt that starts while new
-  credentials await their hello, even the same user's refreshed token: it
-  is refused, not held. Handle it in `onError` like any refusal, and send
-  again once the hello names the user. Not covered yet, each at a
-  reconnect whose cookie names someone else: `qd.<service>.<method>.call()`,
-  a hook call already in Socket.IO's send buffer, and an attempt that
-  starts between the reconnect's connect and its hello.
+- Every call (a hook's, `qd.<service>.<method>.call()`, `call`) goes out
+  only on a socket whose own hello names the user it was made as: from a
+  connect or a drop until that hello, quickdraw holds it, then sends it in
+  order, or fails it `CANCELLED` when the hello names someone else (a
+  session cookie that changed at a reconnect). A channel message sent
+  before that hello is dropped (`isReady` is false until it), so send on
+  `isReady`, not on `status`. Never emit on the socket yourself. A
+  mutation hook also checks each attempt before it goes
+  out: one whose user changed first (`setAuth` in the same handler, an
+  async `onMutate`, a pause offline, a `scope` queue, a retry) fails
+  `CANCELLED`, never sent as the next user and not retried. So does an
+  attempt that starts while new credentials await their hello, even the
+  same user's refreshed token: it is refused, not held. Handle it in
+  `onError` like any refusal, and send again once the hello names the
+  user.
 - A mutation's result (`data`, `error`, `variables`, status) shows only
   while the server's hello names the user the call ran as: a component that
   stays mounted while the user changes shows the next user none of the last

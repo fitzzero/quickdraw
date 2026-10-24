@@ -1,9 +1,10 @@
-// Who a call of a mutation hook runs as, when it may be sent, and when the
-// hook may show it (RFC 0003 sections 6, 11.2 and 11.4). Each call carries a
-// ticket from the moment it is issued: the user it is made as, and the
-// credentials epoch it is made under (`credentialsEpochOf`). The ticket
-// rides beside the call, never in its `variables`: the hook keeps it by the
-// call's variables (`Tickets`).
+// Who a call runs as, when it may be sent, and when a mutation hook may show
+// it (RFC 0003 sections 6, 8.2, 11.2 and 11.4). Each call carries a ticket
+// from the moment it is issued: the user it is made as, and the credentials
+// epoch it is made under (`credentialsEpochOf`). The ticket rides beside the
+// call, never in its `variables`: a mutation hook keeps it by the call's
+// variables (`Tickets`), and every `call()` makes one of its own when it is
+// made, for its socket's hello to check (`refusalAt`).
 //
 // - Issued while a hello is held, a call is the user's that hello names
 //   (`userOf`: `null`, anonymous, counts as a user). Issued while none is
@@ -32,12 +33,13 @@
 //   await their hello; the same user sees it again, and through a
 //   reconnect); a call nobody's yet, to whoever views it under its epoch
 //   while no hello is held, or while it awaits its hello.
-//
-// A call buffered in Socket.IO's send buffer when a reconnect's credentials
-// name another user (a cookie), and an attempt that starts between a
-// reconnect's connect and its hello (the last hello is kept through a
-// drop), still go out as that user, as `call()`'s own do: the reconnect
-// card's.
+// - On the socket: the hook's check runs against the hello the connection
+//   holds, which a drop keeps, while a reconnect's socket may speak for
+//   someone else (a cookie). So `call()` holds every call made while its
+//   socket has no hello of its own, from a connect or a drop until that
+//   hello (`socket.ts`), which each held call's ticket hears first: it goes
+//   out if that hello names its user, by the same rules, and is refused
+//   `CANCELLED` otherwise (`refusalAt`).
 //
 // React-free.
 
@@ -54,6 +56,12 @@ export interface Ticket {
   user(): string | null | undefined;
   /** True while a call issued with no hello awaits the hello that will name its user. */
   waiting(): boolean;
+  /**
+   * The socket's next hello: a call that awaits one takes it as its
+   * listener on the connection would, before that listener runs (the calls
+   * a socket holds decide on its hello first). Nothing for any other.
+   */
+  hear(hello: HelloFrame): void;
 }
 
 /** The ticket of a call issued on `connection` now. */
@@ -62,7 +70,12 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
   const { hello } = connection.getState();
   if (hello !== null) {
     const userId = userOf(hello);
-    return Object.freeze({ epoch, user: () => userId, waiting: () => false });
+    return Object.freeze({
+      epoch,
+      user: () => userId,
+      waiting: () => false,
+      hear: () => undefined,
+    });
   }
   // No hello: the call waits for the next socket, and is the user's its hello names, settled or
   // not (its refused item's retry() is theirs); after a session the server ended, only if it
@@ -70,20 +83,32 @@ export function ticketOf(connection: QuickdrawConnection): Ticket {
   const ended = endedSessionOf(connection)?.hello ?? null;
   let userId: string | null | undefined;
   let waiting = true;
-  const stop = connection.onHello((next) => {
-    if (waiting) {
-      waiting = false;
-      // Other credentials since, or another user than the ended session's: not made as them.
-      if (
-        credentialsEpochOf(connection) === epoch &&
-        (ended === null || userOf(ended) === userOf(next))
-      ) {
-        userId = userOf(next);
-      }
-      stop();
+  let stopHellos = (): void => undefined;
+  let stopEpochs = (): void => undefined;
+  const hear = (next: HelloFrame | undefined): void => {
+    if (!waiting) {
+      return;
+    }
+    waiting = false;
+    stopHellos();
+    stopEpochs();
+    // Other credentials since, or another user than the ended session's: not made as them.
+    if (
+      next !== undefined &&
+      credentialsEpochOf(connection) === epoch &&
+      (ended === null || userOf(ended) === userOf(next))
+    ) {
+      userId = userOf(next);
+    }
+  };
+  stopHellos = connection.onHello(hear);
+  // Other credentials, or a session the server ends, before any hello: nobody's, for good.
+  stopEpochs = connection.subscribe(() => {
+    if (credentialsEpochOf(connection) !== epoch) {
+      hear(undefined);
     }
   });
-  return Object.freeze({ epoch, user: () => userId, waiting: () => waiting });
+  return Object.freeze({ epoch, user: () => userId, waiting: () => waiting, hear });
 }
 
 /**
@@ -115,12 +140,24 @@ export function sendable(ticket: Ticket, hello: HelloFrame | null, epoch: number
   return same === true;
 }
 
-/** The refusals `checkedTicket` made, which no retry sends. */
+/** The refusals made for a user change (`checkedTicket`, `refusalAt`), which no retry sends. */
 const refusals = new WeakSet<QuickdrawError>();
 
-/** True for the refusal of a call whose user changed before it was sent (`checkedTicket`). */
+/** Those of a mutation hook's own check (`checkedTicket`), made before the attempt's optimistic update. */
+const beforeUpdate = new WeakSet<QuickdrawError>();
+
+/** True for the refusal of a call whose user changed before it was sent (`checkedTicket`, `refusalAt`). */
 export function isUserChange(error: unknown): error is QuickdrawError {
   return error instanceof QuickdrawError && refusals.has(error);
+}
+
+/**
+ * True for a refusal of a mutation hook's check (`checkedTicket`): made at
+ * the start of an attempt, before its optimistic update ran, so the update
+ * added nothing anew.
+ */
+export function isCheckRefusal(error: unknown): error is QuickdrawError {
+  return error instanceof QuickdrawError && beforeUpdate.has(error);
 }
 
 /**
@@ -132,8 +169,11 @@ export function isUserChange(error: unknown): error is QuickdrawError {
  * session the server ended, and no hello names its user since; or the hook
  * holds no ticket for it.
  */
-function refusalOn(connection: QuickdrawConnection, stopped: Ticket | undefined): QuickdrawError {
-  const { hello } = connection.getState();
+function refusalOn(
+  connection: QuickdrawConnection,
+  stopped: Ticket | undefined,
+  hello: HelloFrame | null = connection.getState().hello,
+): QuickdrawError {
   const user = stopped?.user();
   const otherUser =
     hello !== null &&
@@ -174,7 +214,26 @@ export function checkedTicket(
   if (ticket !== undefined && stopped === undefined) {
     return ticket;
   }
-  throw refusalOn(connection, stopped);
+  const refusal = refusalOn(connection, stopped);
+  beforeUpdate.add(refusal);
+  throw refusal;
+}
+
+/**
+ * Whether a call made with `ticket` may go out on a socket whose own hello
+ * is `hello` (`call.ts`), which the ticket hears first: `undefined` when it
+ * may, else its refusal, `CANCELLED` and worded as `checkedTicket` words it.
+ */
+export function refusalAt(
+  ticket: Ticket,
+  hello: HelloFrame,
+  connection: QuickdrawConnection,
+): QuickdrawError | undefined {
+  ticket.hear(hello);
+  if (sendable(ticket, hello, credentialsEpochOf(connection))) {
+    return undefined;
+  }
+  return refusalOn(connection, ticket, hello);
 }
 
 /**

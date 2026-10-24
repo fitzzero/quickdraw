@@ -137,8 +137,8 @@ export async function readAfterJoin(
  * starts while the join is in flight waits for it (`readAfterJoin`). When
  * the server acknowledges the join after a read of the query was sent
  * instead (on a socket that was not connected yet, a result prefetched
- * before the watch, or a read that waited in the send buffer through an
- * outage and went out before the topic was joined again), a change made
+ * before the watch, or a read held through an outage that went out at the
+ * new socket's hello, before the topic was joined again), a change made
  * between that read and the join sent no `qd:changed` here, so the query is
  * invalidated once (RFC 0003 section 17).
  */

@@ -92,14 +92,15 @@ export function useCredentialsEpoch(connection: QuickdrawConnection): number {
 /**
  * The hello queries run under, or `null` while they may not run. They run
  * while the connection is connected, or reconnecting with the same
- * credentials (their calls then wait in the send buffer, and nothing
- * refetches the moment it is back: the coordinator spreads the refetches
- * after a reconnect), queries are not backing off after `RATE_LIMITED`, and
- * the server's `qd:hello` on the current credentials has arrived: until it
- * names the user, a version a query sent could be answered "not modified"
- * for data the last user read (`session.ts`). Re-renders when that changes
- * and on each new hello, not on every change of the connection's state, so
- * a query hook shows the emptied cache after another user's hello.
+ * credentials (their calls are then held for the new socket's hello, and
+ * nothing refetches the moment it is back: the coordinator spreads the
+ * refetches after a reconnect), queries are not backing off after
+ * `RATE_LIMITED`, and the server's `qd:hello` on the current credentials
+ * has arrived: until it names the user, a version a query sent could be
+ * answered "not modified" for data the last user read (`session.ts`).
+ * Re-renders when that changes and on each new hello, not on every change
+ * of the connection's state, so a query hook shows the emptied cache after
+ * another user's hello.
  */
 export function useQueriesHello(connection: QuickdrawConnection): HelloFrame | null {
   const readyIn = (state: ConnectionState): HelloFrame | null => {

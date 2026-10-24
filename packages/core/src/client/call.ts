@@ -8,16 +8,25 @@
 //   and while it lasts a call of that kind fails at once, without being
 //   sent, so a client that is being limited stops spending the budget.
 // - Aborting the signal rejects with `CANCELLED` and sends `qd:cancel`; a
-//   call still waiting in Socket.IO's send buffer is dropped instead, so it
+//   call still held for its socket's hello (below) is dropped instead, so it
 //   never reaches the server.
 // - No answer within the time limit rejects with `TIMEOUT`. It is never
 //   retried here: the server may still be running the call.
+// - A call is bound, as it is made, to the user it is made as (`issuer.ts`),
+//   and goes out only on a confirmed socket: connected, and its own
+//   `qd:hello` arrived. One made before then (the first connect, a reconnect
+//   after a drop, the connection waiting to connect again after the server
+//   could not authenticate it, `mayConnect`) is held by the connection
+//   (`callHoldOf`), within its time limit, never in Socket.IO's send buffer,
+//   which the next connect would send before that hello, as whoever the
+//   socket then speaks for (a session cookie may name someone else). The
+//   hello sends it if it names the call's user, by #154's rules, and
+//   refuses it `CANCELLED` otherwise; new credentials, `close` and a session
+//   refused fail it `CANCELLED` meanwhile (`connection.ts`), and its time
+//   running out fails it `INTERNAL`, unsent. Reads are held like writes: a
+//   `.call()` read would hand the next user's answer to the last user's code.
 // - A connection that drops before the answer, or is not open at all,
-//   rejects with `INTERNAL`. A call made while the socket reconnects, or
-//   while the connection waits to connect again after the server could not
-//   authenticate it (`mayConnect`), waits in Socket.IO's send buffer, within
-//   its time limit; new credentials meanwhile fail it with `CANCELLED`
-//   instead of sending it as them (`connection.ts`).
+//   rejects with `INTERNAL`.
 // - A `TIMEOUT`, and the `INTERNAL` of a call whose connection dropped after
 //   it was sent, leave its outcome unknown: the server may have run it, and
 //   may still be running it. `isUnknownOutcome` tells them from refusals, so
@@ -41,11 +50,13 @@ import { QuickdrawError, fromWire } from "../protocol/errors";
 import { isRecord } from "../protocol/guards";
 import { retryAfterOf } from "./backoff";
 import {
+  callHoldOf,
   isTimeLimit,
   mayConnect,
   type QuickdrawConnection,
   type QuickdrawSocket,
 } from "./connection";
+import { refusalAt, ticketOf, type Ticket } from "./issuer";
 import { notifyEach } from "./watch";
 
 /**
@@ -115,6 +126,11 @@ const lostInFlight = new WeakSet<QuickdrawError>();
  */
 export function isUnknownOutcome(error: unknown): boolean {
   return error instanceof QuickdrawError && (error.code === "TIMEOUT" || lostInFlight.has(error));
+}
+
+/** The error of a call whose time ran out before it was sent. */
+function unsentError(): QuickdrawError {
+  return internalError("Not sent: the connection to the server is down");
 }
 
 /** The error of a call whose connection dropped after it was sent. */
@@ -187,6 +203,79 @@ function isQueuedCall(data: unknown, id: CallId): boolean {
   );
 }
 
+/** What the acknowledgement of a call sent with a time limit of `limitMs` stands for. */
+function outcomeOfAck(
+  connection: QuickdrawConnection,
+  kind: MethodKind,
+  limitMs: number,
+  error: Error | null,
+  reply: unknown,
+): CallResult | QuickdrawError {
+  if (error === null) {
+    return readReply(connection, kind, reply);
+  }
+  if (error instanceof QuickdrawError) {
+    // Failed by the connection before it was sent (new credentials).
+    return error;
+  }
+  if (connection.socket.connected) {
+    return new QuickdrawError("TIMEOUT", `No answer within ${limitMs} ms`);
+  }
+  // Still in the send buffer when its time ran out (a connection made elsewhere), Socket.IO drops
+  // it unsent; else it was sent, and the connection dropped: Socket.IO fails the answers it awaits.
+  return error.message === UNSENT_TIMEOUT ? unsentError() : lostError();
+}
+
+/**
+ * Holds a call on `connection` until its socket's hello, which `send`s it
+ * with the time it has left when it names the user `ticket` was made as,
+ * and else `settle`s it with its refusal; the connection's own failure (new
+ * credentials, `close`, a session refused) and its time running out settle
+ * it unsent. Returns the function that lets it go, or `undefined` for a
+ * connection that holds nothing (one made elsewhere): send it at once.
+ */
+function holdUntilConfirmed(
+  connection: QuickdrawConnection,
+  ticket: Ticket,
+  deadline: number,
+  send: (ms: number) => void,
+  settle: (outcome: QuickdrawError) => void,
+): (() => void) | undefined {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const release = callHoldOf(connection)?.hold({
+    confirmed(hello) {
+      clearTimeout(timer);
+      const refusal = refusalAt(ticket, hello, connection);
+      const left = deadline - Date.now();
+      if (refusal !== undefined) {
+        settle(refusal);
+      } else if (left > 0) {
+        send(left);
+      } else {
+        settle(unsentError());
+      }
+    },
+    failed(error) {
+      clearTimeout(timer);
+      settle(error);
+    },
+  });
+  if (release === undefined) {
+    return undefined;
+  }
+  timer = setTimeout(
+    () => {
+      release();
+      settle(unsentError());
+    },
+    Math.max(0, deadline - Date.now()),
+  );
+  return () => {
+    clearTimeout(timer);
+    release();
+  };
+}
+
 /** Drops the call from Socket.IO's send buffer, or else asks the server to cancel it. */
 function cancelCall(socket: QuickdrawSocket, id: CallId): void {
   const queued = socket.sendBuffer.findIndex((packet) => isQueuedCall(packet.data, id));
@@ -227,13 +316,19 @@ export function call<Output = unknown>(
     );
   }
   const id = connection.nextCallId();
+  // Bound to the user it is made as: it goes out only on a socket whose hello names them.
+  const ticket = ticketOf(connection);
+  const deadline = Date.now() + timeoutMs;
   return new Promise<CallResult<Output>>((resolve, reject) => {
     let settled = false;
+    let sent = false;
+    let letGo = (): void => undefined;
     const settle = (outcome: CallResult | QuickdrawError): void => {
       if (settled) {
         return;
       }
       settled = true;
+      letGo();
       signal?.removeEventListener("abort", onAbort);
       if (outcome instanceof QuickdrawError) {
         reject(outcome);
@@ -245,27 +340,33 @@ export function call<Output = unknown>(
       }
     };
     function onAbort(): void {
-      cancelCall(socket, id);
+      if (sent) {
+        cancelCall(socket, id);
+      }
       settle(cancelledError());
     }
-    socket
-      .timeout(timeoutMs)
-      .emit(CLIENT_EVENTS.call, envelopeOf(id, request), (error: Error | null, reply: unknown) => {
-        if (error === null) {
-          settle(readReply(connection, kind, reply));
-        } else if (error instanceof QuickdrawError) {
-          // Failed by the connection before it was sent (new credentials).
-          settle(error);
-        } else if (socket.connected) {
-          settle(new QuickdrawError("TIMEOUT", `No answer within ${timeoutMs} ms`));
-        } else if (error.message === UNSENT_TIMEOUT) {
-          // Still in the send buffer when its time ran out: Socket.IO drops it unsent.
-          settle(internalError("No answer: the connection to the server is down"));
-        } else {
-          // Sent, then the connection dropped: Socket.IO fails the acknowledgements it waits for.
-          settle(lostError());
-        }
-      });
+    const send = (ms: number): void => {
+      sent = true;
+      socket
+        .timeout(ms)
+        .emit(
+          CLIENT_EVENTS.call,
+          envelopeOf(id, request),
+          (error: Error | null, reply: unknown) => {
+            settle(outcomeOfAck(connection, kind, timeoutMs, error, reply));
+          },
+        );
+    };
+    // A socket without a hello of its own may speak for someone else (a cookie): wait for it.
+    const confirmed = (callHoldOf(connection)?.confirmed ?? true) && socket.connected;
+    const held = confirmed
+      ? undefined
+      : holdUntilConfirmed(connection, ticket, deadline, send, settle);
+    if (held === undefined) {
+      send(timeoutMs);
+    } else {
+      letGo = held;
+    }
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
