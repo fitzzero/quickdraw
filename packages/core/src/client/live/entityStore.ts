@@ -282,6 +282,7 @@ export function createEntityStore(host: LiveHost): EntityStore {
       const holdings = [...new Set(ids)].map((id) => {
         const holding = state.registry.acquire(rowKey(service, id), () => ({ service, id }));
         if (holding.isNew) {
+          state.host.cache.hold(entityKey(service, id));
           want(state, service, id);
         }
         return holding;

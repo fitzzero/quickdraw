@@ -187,6 +187,7 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
       const { entry: controller } = holding;
       const stopAll = options.loadAll === true ? controller.loadAll() : undefined;
       if (holding.isNew) {
+        host.cache.hold(controller.key);
         controller.start();
       }
       checks.start();
