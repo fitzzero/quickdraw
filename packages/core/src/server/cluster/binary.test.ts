@@ -4,9 +4,10 @@
 // as itself, wherever it sat in an item; items without binary, and every
 // item of a server that sends JSON only, go as they are; the sender's items
 // are never changed; and the receiver puts a value back only over the `null`
-// its own parse holds where the path says.
+// its own parse holds where the path says, following own keys only, and
+// rebuilds only the kinds of its own table.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { packItems, registerBinary, unpackItems, type PackedItems } from "./binary";
 
 /** A server that sends binary, and one that sends JSON only. */
@@ -68,6 +69,9 @@ describe("a stream push's binary values across nodes", () => {
     const plain = [{ n: 1 }, "two", [3]];
     expect(packItems(binary, plain)).toEqual({ items: plain });
     expect(packItems(binary, plain).items).toBe(plain);
+    // An array is walked by index, as JSON writes it: a key of its own beside them never travels.
+    const named = Object.assign([1, 2], { bytes: Buffer.from([4]) });
+    expect(packItems(binary, [named])).toEqual({ items: [named] });
   });
 
   it("go as JSON, walked by nothing, from a server that sends JSON only", () => {
@@ -116,5 +120,57 @@ describe("a stream push's binary values across nodes", () => {
   it("rebuild bytes that do not fill a kind's elements as a Uint8Array", () => {
     expect(unpackItems([null], [[[0], "Int16Array", "AQID"]])).toEqual([new Uint8Array([1, 2, 3])]);
     expect(unpackItems([null], [[[0], "SomeView", "AQ=="]])).toEqual([new Uint8Array([1])]);
+  });
+
+  it("follow own keys only: a path through an inherited __proto__ throws nothing and changes nothing", () => {
+    const parsed = JSON.parse('[{}, {"own": {}}, [null]]') as unknown[];
+    const before = JSON.stringify(parsed);
+    // Through inherited keys these reach Object.prototype, whose own `__proto__` reads null, and
+    // writing there throws ("Immutable prototype object"), inside the adapter's handler.
+    expect(() =>
+      unpackItems(parsed, [
+        [[0, "__proto__", "__proto__"], "Buffer", "AQ=="],
+        [[1, "own", "__proto__", "__proto__"], "Buffer", "AQ=="],
+        [[2, "__proto__", "__proto__", "__proto__"], "Buffer", "AQ=="],
+      ]),
+    ).not.toThrow();
+    expect(JSON.stringify(parsed)).toBe(before);
+    expect(Object.getPrototypeOf(parsed[0])).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(Object.prototype)).toBeNull();
+    // Nor on a key an item only inherits, though a polluted prototype reads null there.
+    const prototype = Object.prototype as Record<string, unknown>;
+    prototype.plantedNull = null;
+    try {
+      const item: Record<string, unknown> = {};
+      unpackItems([item], [[[0, "plantedNull"], "Buffer", "AQ=="]]);
+      expect(Object.hasOwn(item, "plantedNull")).toBe(false);
+    } finally {
+      delete prototype.plantedNull;
+    }
+  });
+
+  it("rebuild only the kinds of its own table: an inherited name, or one planted on Object.prototype, is a Uint8Array", () => {
+    const planted = vi.fn();
+    const prototype = Object.prototype as Record<string, unknown>;
+    prototype.Planted = planted;
+    try {
+      const back = unpackItems(
+        [null, null, null],
+        [
+          [[0], "Planted", "AQID"],
+          [[1], "constructor", "AQID"],
+          [[2], "toString", "AQID"],
+        ],
+      );
+      expect(planted).not.toHaveBeenCalled();
+      expect(back.map((value) => value instanceof Uint8Array && !Buffer.isBuffer(value))).toEqual([
+        true,
+        true,
+        true,
+      ]);
+      expect(back).toEqual([1, 2, 3].map(() => new Uint8Array([1, 2, 3])));
+    } finally {
+      delete prototype.Planted;
+    }
   });
 });

@@ -40,21 +40,28 @@ export function registerBinary(io: object, binary: boolean): void {
   SENDS_BINARY.set(io, binary);
 }
 
-/** The views a kind names, rebuilt over the bytes; another kind comes back as a `Uint8Array`. */
-const VIEWS: Readonly<Record<string, new (buffer: ArrayBuffer) => ArrayBufferView>> = {
-  Int8Array,
-  Uint8Array,
-  Uint8ClampedArray,
-  Int16Array,
-  Uint16Array,
-  Int32Array,
-  Uint32Array,
-  Float32Array,
-  Float64Array,
-  BigInt64Array,
-  BigUint64Array,
-  DataView,
-};
+/**
+ * The views a kind names, rebuilt over the bytes; another kind comes back as
+ * a `Uint8Array`. A `Map`, so a kind another node names never reaches a key
+ * an object inherits (`constructor`, or one planted on `Object.prototype`).
+ */
+const VIEWS: ReadonlyMap<string, new (buffer: ArrayBuffer) => ArrayBufferView> = new Map<
+  string,
+  new (buffer: ArrayBuffer) => ArrayBufferView
+>([
+  ["Int8Array", Int8Array],
+  ["Uint8Array", Uint8Array],
+  ["Uint8ClampedArray", Uint8ClampedArray],
+  ["Int16Array", Int16Array],
+  ["Uint16Array", Uint16Array],
+  ["Int32Array", Int32Array],
+  ["Uint32Array", Uint32Array],
+  ["Float32Array", Float32Array],
+  ["Float64Array", Float64Array],
+  ["BigInt64Array", BigInt64Array],
+  ["BigUint64Array", BigUint64Array],
+  ["DataView", DataView],
+]);
 
 function isBinary(value: object): value is ArrayBuffer | ArrayBufferView {
   return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
@@ -75,34 +82,60 @@ function base64Of(value: ArrayBuffer | ArrayBufferView): string {
   return bytes.toString("base64");
 }
 
-/** What a walk of the items keeps: the binary values it took out, and the containers it is inside. */
+/**
+ * What a walk of the items keeps: the binary values it took out, the
+ * containers it is inside, and where it is (copied into an entry only when
+ * it takes a value out).
+ */
 interface Walk {
   readonly entries: BinaryEntry[];
   readonly inside: Set<object>;
+  readonly path: (string | number)[];
 }
 
-/** `value`'s children without their binary values: a copy when any had one, else `value` itself. */
-function withoutBinary(value: object, path: Path, walk: Walk): object {
-  let copy: Record<string, unknown> | unknown[] | undefined;
+/** A container's `child` under `key` without its binary values; a primitive is never walked. */
+function childWithout(child: unknown, key: string | number, walk: Walk): unknown {
+  if (typeof child !== "object" || child === null) {
+    return child;
+  }
+  walk.path.push(key);
+  const taken = takeOut(child, walk);
+  walk.path.pop();
+  return taken;
+}
+
+/** An array's elements without their binary values, by index as JSON writes them: a copy when any had one. */
+function arrayWithout(value: readonly unknown[], walk: Walk): readonly unknown[] {
+  let copy: unknown[] | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const child = value[index];
+    const taken = childWithout(child, index, walk);
+    if (taken !== child) {
+      copy ??= [...value];
+      copy[index] = taken;
+    }
+  }
+  return copy ?? value;
+}
+
+/** An object's own keys without their binary values: a copy when any had one. */
+function objectWithout(value: object, walk: Walk): object {
+  let copy: Record<string, unknown> | undefined;
   for (const key of Object.keys(value)) {
     const child: unknown = (value as Record<string, unknown>)[key];
-    const index = Array.isArray(value) ? Number(key) : key;
-    const taken = takeOut(child, [...path, index], walk);
+    const taken = childWithout(child, key, walk);
     if (taken !== child) {
-      copy ??= Array.isArray(value) ? [...value] : { ...value };
-      (copy as Record<string, unknown>)[key] = taken;
+      copy ??= { ...value };
+      copy[key] = taken;
     }
   }
   return copy ?? value;
 }
 
 /** `value` with each binary value in it listed in `walk` and replaced by `null`. */
-function takeOut(value: unknown, path: Path, walk: Walk): unknown {
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
+function takeOut(value: object, walk: Walk): unknown {
   if (isBinary(value)) {
-    walk.entries.push([path, kindOf(value), base64Of(value)]);
+    walk.entries.push([[...walk.path], kindOf(value), base64Of(value)]);
     return null;
   }
   // A cycle, which JSON refuses as before, or a value that writes its own JSON.
@@ -111,7 +144,7 @@ function takeOut(value: unknown, path: Path, walk: Walk): unknown {
     return value;
   }
   walk.inside.add(value);
-  const taken = withoutBinary(value, path, walk);
+  const taken = Array.isArray(value) ? arrayWithout(value, walk) : objectWithout(value, walk);
   walk.inside.delete(value);
   return taken;
 }
@@ -126,8 +159,8 @@ export function packItems(io: object, items: readonly unknown[]): PackedItems {
   if (SENDS_BINARY.get(io) !== true) {
     return { items };
   }
-  const walk: Walk = { entries: [], inside: new Set() };
-  const packed = takeOut(items, [], walk) as readonly unknown[];
+  const walk: Walk = { entries: [], inside: new Set(), path: [] };
+  const packed = takeOut(items, walk) as readonly unknown[];
   return walk.entries.length === 0 ? { items } : { items: packed, bin: walk.entries };
 }
 
@@ -155,7 +188,7 @@ function binaryOf(kind: string, base64: string): unknown {
   if (kind === "ArrayBuffer") {
     return buffer;
   }
-  const View = VIEWS[kind] ?? Uint8Array;
+  const View = VIEWS.get(kind) ?? Uint8Array;
   try {
     return new View(buffer);
   } catch {
