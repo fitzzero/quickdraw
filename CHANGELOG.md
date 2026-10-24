@@ -820,6 +820,14 @@ readonly prisma: Tracked<Db>`, a private `#db`, or a constructor's
 
 ### Codemod
 
+- **An import a destructuring default uses is kept.** The import cleanup
+  every file the codemod writes gets did not count a name given as a
+  destructuring default as used, so an import whose one use was one (a 4.x
+  list handler's `const { page = 1, pageSize = DEFAULT_PAGE_SIZE } = payload`)
+  was removed, and the migrated file failed to compile (TS2304). Every
+  part of a destructuring element but its key (`{ key: name }`) now counts
+  as a use: object and array pattern defaults, a renamed parameter's
+  (`{ c: d = LIMIT }`) and a `for...of` pattern's.
 - **Writers that take the Prisma client are typed to take the tracked
   one.** A module function with a parameter typed as the app's Prisma
   client (`prisma: PrismaClient`, or `Prisma.TransactionClient`), which
