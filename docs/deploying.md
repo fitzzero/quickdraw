@@ -212,6 +212,14 @@ until it is replaced.
   database, a shared store), not one node's memory. An item another node
   pushed around the moment of subscribing may then arrive both in the seed
   and as a frame: make such items idempotent (a tick, an id).
+- **Volatile streams.** A push to a `volatile` stream goes to every node the
+  same way, with a seed or without, and each node sends the items to its
+  own subscribers, skipping a socket while 64 relay messages and volatile
+  frames sent to it wait on its connection: only the node that holds a
+  socket knows its backlog. A node of an earlier version, during a rolling
+  deploy, still sends through the adapter's room broadcast with Socket.IO's
+  volatile flag, which drops an item whenever a write to the socket is in
+  flight.
 - **Room hosts.** Every node knows each app room's host (host mode,
   `ctx.rooms.setHost`): each change goes to every node, and a node that
   starts asks the others for the hosts their sockets are, wired with

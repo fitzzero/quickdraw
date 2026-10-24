@@ -3035,7 +3035,7 @@ export function TaskRoom({
   tick: more than 64 items to one socket in one tick drop the rest, so push
   a snapshot instead of a burst that big. Behind a cluster adapter its
   items go to every node, as a seeded stream's do, and each node checks its
-  own sockets. `pushMany(scope, items)`
+  own sockets (docs/deploying.md). `pushMany(scope, items)`
   (`pushMany(items)` for a global stream) pushes several items to one feed
   at once: every item is checked before any is kept or sent, and each goes
   out as its own frame, in order; use it rather than `push` in a loop
