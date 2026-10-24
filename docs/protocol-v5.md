@@ -259,11 +259,15 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 
 ## What a client must do
 
-- Wait for `qd:hello` before the first call: it says who the socket acts for
-  (`userId`, `serviceAccess`) and the limits to stay within. Each hello is a
-  new socket in no app room: make the joining calls again after every one. A
-  `serverId` other than the last hello's means the server restarted (or,
-  behind a cluster, another node answered): its state starts over.
+- Wait for `qd:hello` on every socket, a reconnect's included, before any
+  call or channel message on it: it says who the socket acts for (`userId`,
+  `serviceAccess`) and the limits to stay within, and a reconnect's socket
+  may act for someone else (a session cookie can change meanwhile). Hold a
+  call made before it, and send it only if the hello names the user it was
+  made as. Each hello is a new socket in no app room: make the joining calls
+  again after every one. A `serverId` other than the last hello's means the
+  server restarted (or, behind a cluster, another node answered): its state
+  starts over.
 - Give each `qd:call` an `id` no call in flight on the socket has; `qd:cancel`
   names it, and the call's acknowledgement still arrives. Send it with an ack
   id: the server ignores a `qd:call` sent without one, with no reply and no

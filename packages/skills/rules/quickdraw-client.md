@@ -133,8 +133,10 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   only on a socket whose own hello names the user it was made as: from a
   connect or a drop until that hello, quickdraw holds it, then sends it in
   order, or fails it `CANCELLED` when the hello names someone else (a
-  session cookie that changed at a reconnect). Never emit a call on the
-  socket yourself. A mutation hook also checks each attempt before it goes
+  session cookie that changed at a reconnect). A channel message sent
+  before that hello is dropped (`isReady` is false until it), so send on
+  `isReady`, not on `status`. Never emit on the socket yourself. A
+  mutation hook also checks each attempt before it goes
   out: one whose user changed first (`setAuth` in the same handler, an
   async `onMutate`, a pause offline, a `scope` queue, a retry) fails
   `CANCELLED`, never sent as the next user and not retried. So does an

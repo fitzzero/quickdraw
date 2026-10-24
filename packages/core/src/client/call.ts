@@ -130,7 +130,7 @@ export function isUnknownOutcome(error: unknown): boolean {
 
 /** The error of a call whose time ran out before it was sent. */
 function unsentError(): QuickdrawError {
-  return internalError("No answer: the connection to the server is down");
+  return internalError("Not sent: the connection to the server is down");
 }
 
 /** The error of a call whose connection dropped after it was sent. */

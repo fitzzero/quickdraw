@@ -1814,9 +1814,12 @@ export function TaskDetail({ id }: { readonly id: string }) {
   buffer, and the hello sends them, in the order they were made, or fails
   `CANCELLED` each one made as someone else. `setAuth`, `close` and a
   refused session fail the calls held `CANCELLED`; one whose time runs out
-  first fails `INTERNAL`, unsent. The reads that resume live rows and
-  collections still go at the connect: their answers follow the hello, and
-  a hello naming another user drops them.
+  first fails `INTERNAL` ("Not sent: the connection to the server is
+  down"). A channel message (`useChannel`'s `send`) sent before that hello
+  is dropped, as input the next one supersedes, and `isReady` reads false
+  meanwhile, though a drop keeps the last hello. The reads that resume live
+  rows and collections still go at the connect: their answers follow the
+  hello, and a hello naming another user drops them.
 - A mutation hook's call is bound, as it is made, to the user it is made as
   and to the credentials it is made under, and each attempt is checked
   before it goes out: one whose user changed first (`setAuth` in the same
@@ -1890,8 +1893,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
   `useCollection` and a search's held scope show nothing of another row,
   scope or user while a new id, scope or user loads. A mounted mutation
-  hook shows the next user none of the last user's calls, and no call is
-  sent as the next user (above).
+  hook shows the next user none of the last user's calls, and no call or
+  channel message is sent as the next user (above).
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.

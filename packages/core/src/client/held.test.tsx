@@ -7,10 +7,11 @@
 // changes the principal it rendered with changes whom the next connect
 // speaks for, as a cookie would; holding the server's hello back opens the
 // window between a connect and its hello, as a browser's separate frames
-// do.
+// do. A channel message (`useChannel`) is dropped in that window instead:
+// a channel that requires no room takes one from any signed-in socket.
 
 import { QueryClient } from "@tanstack/react-query";
-import { act, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { QuickdrawError, defineContract, mutation, query } from "../index";
@@ -39,6 +40,27 @@ const notes = defineContract("noteService", {
   },
 });
 
+const room = defineContract("roomService", {
+  methods: { noop: mutation({ input: z.object({}), output: z.null() }) },
+  channels: { cursor: { payload: z.object({ x: z.number() }) } },
+});
+
+/** Every channel message the server took, by whom. */
+const cursors: { readonly userId: string; readonly x: number }[] = [];
+
+const roomService = server.defineService(room, {
+  methods: { noop: { access: "authenticated", handler: () => null } },
+  channels: {
+    // No `requires`: any signed-in socket may send it, in an app room or not.
+    cursor: {
+      access: "authenticated",
+      handler: (payload, ctx) => {
+        cursors.push({ userId: ctx.principal.userId, x: payload.x });
+      },
+    },
+  },
+});
+
 /** Every call the server ran, in order: `<method>:<text> as <user>`. */
 const ran: string[] = [];
 /** Every save the server finished, by whom. */
@@ -64,13 +86,14 @@ const noteService = server.defineService(notes, {
   },
 });
 
-const qd = createQuickdrawClient({ notes });
+const qd = createQuickdrawClient({ notes, room });
 const apps: TestApp[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
   ran.length = 0;
   saved.length = 0;
+  cursors.length = 0;
 });
 
 /** Whom the connection's hello names, as a render shows it. */
@@ -82,7 +105,7 @@ function Who() {
 /** A test app whose `authenticate` refuses `refused`, and trusts any other principal. */
 async function appRefusing(refused?: string) {
   const app = await createTestApp({
-    services: [noteService],
+    services: [noteService, roomService],
     auth: {
       authenticate: ({ auth }) => {
         const { principal } = auth as { readonly principal?: Principal };
@@ -164,6 +187,50 @@ async function connectAgain(connection: QuickdrawConnection): Promise<void> {
 }
 
 const changed = "CANCELLED: The user changed before the call was sent";
+
+/** A cursor channel's sender: its button sends `{ x: 7 }`, and says whether it is ready. */
+function Cursor() {
+  const { userId } = useQuickdraw();
+  const { send, isReady } = qd.room.cursor.useChannel();
+  return (
+    <button type="button" onClick={() => send({ x: 7 })}>
+      {`${userId ?? "-"} ${isReady ? "ready" : "waiting"}`}
+    </button>
+  );
+}
+
+describe("a channel message sent while its socket has no hello of its own", () => {
+  it.each([
+    ["Ed's", "ed"],
+    ["Ada's own", "ada"],
+  ])(
+    "is dropped between a reconnect's connect and its hello, and sent after it: %s cookie",
+    async (_whose, next) => {
+      const principal = { userId: "ada" };
+      const { view } = await signedIn(principal, <Cursor />);
+      const shown = within(view.container);
+      await shown.findByText("ada ready");
+      await view.disconnect();
+      principal.userId = next;
+      const letIn = holdHellos(view.connection.socket);
+      await connectAgain(view.connection);
+      // Connected, with the hello a drop keeps: not ready, and Ada's input goes nowhere.
+      await shown.findByText("ada waiting");
+      fireEvent.click(shown.getByRole("button"));
+      await settle(50);
+      expect(cursors).toEqual([]);
+      letIn();
+      await shown.findByText(`${next} ready`);
+      await settle(50);
+      expect(cursors).toEqual([]);
+      // Once the hello is in, a message goes out as the user it names.
+      fireEvent.click(shown.getByRole("button"));
+      await waitFor(() => {
+        expect(cursors).toEqual([{ userId: next, x: 7 }]);
+      });
+    },
+  );
+});
 
 describe("a call made while its socket has no hello of its own", () => {
   it("is held, never buffered, and sent as its user once the first hello comes", async () => {
@@ -420,7 +487,7 @@ describe("a call made while its socket has no hello of its own", () => {
     const outcomes: string[] = [];
     noted(outcomes, qd.notes.save.call({ text: "too-late" }, { timeoutMs: 50 }));
     await settle(120);
-    expect(outcomes).toEqual(["INTERNAL: No answer: the connection to the server is down"]);
+    expect(outcomes).toEqual(["INTERNAL: Not sent: the connection to the server is down"]);
     expect(callHoldOf(view.connection)?.size).toBe(0);
     letIn();
     await helloFor(view.connection, "ada");

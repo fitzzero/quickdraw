@@ -306,8 +306,13 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   resume), and fails the rest `CANCELLED` ("The user changed before the
   call was sent"). Reads are held like writes. `setAuth`, `close` and a
   refused session fail the held calls `CANCELLED`, as they failed the
-  buffered ones; one whose time runs out while held fails `INTERNAL`,
-  unsent, as one that timed out in the buffer did. **Behavior change:** a
+  buffered ones; one whose time runs out while held fails `INTERNAL` "Not
+  sent: the connection to the server is down" (one that timed out in the
+  buffer said "No answer", as a lost answer still does). A channel message
+  sent in the same window ran as Ed too (a channel that requires no room
+  takes one from any signed-in socket): `useChannel`'s `send` now drops it
+  until the socket's own hello, and `isReady` reads false meanwhile, as a
+  drop keeps the last hello. **Behavior change:** a
   call made before the first hello now goes out after it, and the reads
   that resume live rows and collections, still sent from the connect, may
   go before or after the calls held across a drop (they went after
