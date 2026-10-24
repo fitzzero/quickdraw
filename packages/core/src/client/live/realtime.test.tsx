@@ -1,16 +1,18 @@
 // The realtime hooks (RFC 0003 section 12.5) against a real server:
 // `useStream` shows the seed, then appends what is pushed after it, trimmed
 // to `max`, shares one subscription between components and subscribes again
-// after a reconnect; `useChannel` sends what the server's handler receives;
-// `useEvent` hears the typed events of the rooms its socket is in;
-// `usePresence` follows who joins and leaves an app room. Then the same
+// after a reconnect; `useChannel` sends what the server's handler receives,
+// every message of a burst, and drops one only while the connection is
+// backed up; `useEvent` hears the typed events of the rooms its socket is
+// in; `usePresence` follows who joins and leaves an app room. Then the same
 // members on a mock client.
 
 import { act, render, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineContract, mutation, QuickdrawError } from "../../index";
+import { FAST_BACKLOG_BYTES } from "../../protocol/version";
 import { initQuickdraw, type Principal } from "../../server/index";
 import { createMockClient, renderWithQuickdraw } from "../../testing/client";
 import { createTestApp, type TestApp } from "../../testing/index";
@@ -33,11 +35,16 @@ const room = defineContract("roomService", {
     news: { item: z.string(), seed: 2, access: "public" },
     secret: { item: z.string(), access: { service: "Admin" } },
   },
-  channels: { cursor: { payload: z.object({ x: z.number(), y: z.number().default(0) }) } },
+  channels: {
+    cursor: { payload: z.object({ x: z.number(), y: z.number().default(0) }) },
+    /** A rate no burst here reaches: what the client sends is what the handler gets. */
+    aim: { payload: z.object({ n: z.number() }), ratePerSecond: 10_000, burst: 10_000 },
+  },
   events: { shouted: { payload: z.object({ text: z.string() }) } },
 });
 
 const cursors: { readonly userId: string; readonly x: number; readonly y: number }[] = [];
+const aims: number[] = [];
 
 const roomService = server.defineService(room, {
   methods: {
@@ -59,6 +66,12 @@ const roomService = server.defineService(room, {
         cursors.push({ userId: ctx.principal.userId, ...payload });
       },
     },
+    aim: {
+      access: "authenticated",
+      handler: (payload) => {
+        aims.push(payload.n);
+      },
+    },
   },
 });
 
@@ -68,6 +81,7 @@ const apps: TestApp[] = [];
 afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => await app.close()));
   cursors.length = 0;
+  aims.length = 0;
 });
 
 async function start() {
@@ -101,6 +115,38 @@ function Cursor() {
   const { send, isReady } = qd.room.cursor.useChannel();
   return (
     <button type="button" onClick={() => send({ x: 3 })}>
+      {isReady ? "ready" : "waiting"}
+    </button>
+  );
+}
+
+/** Sends three cursors in one effect once its socket is ready: in one tick. */
+function Burst() {
+  const { send, isReady } = qd.room.cursor.useChannel();
+  const sent = useRef(false);
+  useEffect(() => {
+    if (isReady && !sent.current) {
+      sent.current = true;
+      for (const x of [1, 2, 3]) {
+        send({ x });
+      }
+    }
+  }, [isReady, send]);
+  return <p>{isReady ? "ready" : "waiting"}</p>;
+}
+
+/** Sends `count` aims in one click: in one tick. */
+function Aim({ count }: { readonly count: number }) {
+  const { send, isReady } = qd.room.aim.useChannel();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        for (let n = 0; n < count; n += 1) {
+          send({ n });
+        }
+      }}
+    >
       {isReady ? "ready" : "waiting"}
     </button>
   );
@@ -306,6 +352,61 @@ describe("useChannel", () => {
     await waitFor(() => {
       expect(cursors).toEqual([{ userId: "ada", x: 3, y: 0 }]);
     });
+  });
+
+  it("sends every message of a burst: three in one effect all reach the handler", async () => {
+    const app = await start();
+    const view = await renderWithQuickdraw(<Burst />, { app, as: ada, client: qd });
+    await view.findByText("ready");
+    // Socket.IO's volatile flag kept the first: the transport was busy with it for the tick.
+    await waitFor(() => {
+      expect(cursors.map((cursor) => cursor.x)).toEqual([1, 2, 3]);
+    });
+  });
+
+  it("drops a message while the connection is backed up, and sends the next once it is not", async () => {
+    const app = await start();
+    const view = await renderWithQuickdraw(<Cursor />, { app, as: ada, client: qd });
+    const button = await view.findByText("ready");
+    const sent = outgoing(view.connection);
+    const channel = () => sent.filter(([event]) => event === "qd:ch");
+    // More than 32 KiB unsent in the WebSocket: backed up.
+    const { transport } = view.connection.socket.io.engine as unknown as {
+      readonly transport: { readonly ws: object };
+    };
+    Object.defineProperty(transport.ws, "bufferedAmount", {
+      configurable: true,
+      value: FAST_BACKLOG_BYTES + 1,
+    });
+    act(() => {
+      button.click();
+    });
+    expect(channel()).toEqual([]);
+    Reflect.deleteProperty(transport.ws, "bufferedAmount");
+    act(() => {
+      button.click();
+    });
+    expect(channel()).toEqual([["qd:ch", ["roomService", "cursor", { x: 3 }]]]);
+    await waitFor(() => {
+      expect(cursors).toEqual([{ userId: "ada", x: 3, y: 0 }]);
+    });
+  });
+
+  it("sends 64 of a burst of 100 in one tick: the engine holds the one it is writing until it drains", async () => {
+    const app = await start();
+    const view = await renderWithQuickdraw(<Aim count={100} />, { app, as: ada, client: qd });
+    const button = await view.findByText("ready");
+    act(() => {
+      button.click();
+    });
+    await waitFor(() => {
+      expect(aims).toHaveLength(64);
+    });
+    // The other 36 were dropped, not held: a round trip later the handler has the first 64 alone.
+    await act(async () => {
+      await qd.room.enter.call({ room: "lobby" });
+    });
+    expect(aims).toEqual(Array.from({ length: 64 }, (_, n) => n));
   });
 });
 

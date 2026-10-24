@@ -212,6 +212,24 @@ until it is replaced.
   database, a shared store), not one node's memory. An item another node
   pushed around the moment of subscribing may then arrive both in the seed
   and as a frame: make such items idempotent (a tick, an id).
+- **Volatile streams.** A push to a `volatile` stream goes to every node the
+  same way, with a seed or without, and each node sends the items to its
+  own subscribers, skipping a socket while 64 relay messages and volatile
+  frames sent to it wait on its connection: only the node that holds a
+  socket knows its backlog. A node of an earlier version, during a rolling
+  deploy, still sends through the adapter's room broadcast with Socket.IO's
+  volatile flag, which drops an item whenever a write to the socket is in
+  flight. Both kinds of push go as a server-side event, which the Redis
+  adapter sends as JSON: on a server that sends binary (`binary: true`),
+  each binary value of the items goes beside them, in base64, and every
+  node of this version puts it back, so its subscribers and its seed get it
+  as binary. During a rolling deploy a node of an earlier version does
+  not: it reads `null` where each binary value was in a push from a node of
+  this version, sends that `null` to its subscribers and keeps it in its
+  seed, until it runs this version too. (From a seeded stream's push it
+  used to read the JSON form, `{ type: "Buffer", data: [...] }` for a
+  `Buffer`; a volatile stream's items reached it through the room
+  broadcast.)
 - **Room hosts.** Every node knows each app room's host (host mode,
   `ctx.rooms.setHost`): each change goes to every node, and a node that
   starts asks the others for the hosts their sockets are, wired with

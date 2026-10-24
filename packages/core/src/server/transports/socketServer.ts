@@ -36,6 +36,7 @@ import {
   listenForGrants,
   refreshGrants,
   regrantsOf,
+  registerBinary,
   registerClusterDeployment,
   registerClusterTimeout,
   rotate,
@@ -171,6 +172,8 @@ export function createSocketServer(
   registerClusterDeployment(io, settings.cluster);
   // `setupRedisAdapter` gives the adapter it builds this request timeout.
   registerClusterTimeout(io, settings.cluster?.timeoutMs);
+  // A stream push to the other nodes carries its items' binary values beside them.
+  registerBinary(io, settings.binary);
   const context: SocketContext = {
     dispatcher: settings.dispatcher,
     logger: settings.logger,

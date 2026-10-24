@@ -3029,7 +3029,14 @@ export function TaskRoom({
   history is the app's: store the rows and expose a collection), and sends
   `qd:stream [service, stream, scope, item]` (`scope` null for a global
   stream; positional, so a fast stream's frames carry no key names) to the
-  feed's subscribers, volatile when the stream says so. `pushMany(scope, items)`
+  feed's subscribers. A `volatile` stream drops an item for a socket only
+  while its connection is backed up (64 relay messages and volatile frames
+  sent to it waiting for its transport), never because another frame went
+  to it just before. On a free connection the first item of a burst goes at
+  once and 64 more wait for it; the rest are dropped until the connection
+  sends what waits, so push a snapshot instead of a bigger burst. Behind a
+  cluster adapter its items go to every node, as a seeded stream's do, and
+  each node checks its own sockets (docs/deploying.md). `pushMany(scope, items)`
   (`pushMany(items)` for a global stream) pushes several items to one feed
   at once: every item is checked before any is kept or sent, and each goes
   out as its own frame, in order; use it rather than `push` in a loop
@@ -3077,8 +3084,12 @@ export function TaskRoom({
   `validate: "development"` checks pushed items only while the dispatcher
   checks outputs (`outputValidation`, off in production), for a hot stream:
   unchecked, an item goes out as pushed, extra keys included.
-- Channels: each message is `qd:ch [service, channel, payload]`, sent
-  volatile and never answered. Per socket and channel a token bucket
+- Channels: each message is `qd:ch [service, channel, payload]`, never
+  answered. The client drops one rather than queue it while its connection
+  is backed up (64 packets, or more than 32 KiB, waiting to be sent), never
+  because another went out just before: of a burst, 64 go out, and the rest
+  are dropped until the connection has sent them (on a WebSocket, by the
+  next tick). Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is
   over the rate, and a socket whose drops within 10 s pass 100 times the
   rate is disconnected. A message from an anonymous socket, one that fails

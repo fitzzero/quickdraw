@@ -335,7 +335,10 @@ export type StreamSubscribeReply<Item = unknown> =
  * no key names: `scope` is `null` for a global stream. The positions are
  * fixed; a later revision may append elements after `item`, never insert
  * them, so a client reads the four it knows and ignores the rest. Before
- * `5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
+ * `5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`. A volatile
+ * stream's frame is dropped for a socket while its connection is backed up
+ * (`PEER_RELAY_FAST_BACKLOG` messages waiting for it): not Socket.IO's
+ * volatile flag, which drops a message whenever a write is in flight.
  */
 export type StreamFrame<Item = unknown> = readonly [
   s: string,
@@ -345,9 +348,11 @@ export type StreamFrame<Item = unknown> = readonly [
 ];
 
 /**
- * `qd:ch`, sent volatile and never acknowledged: `[service, channel,
- * payload]`. A later revision may append elements after `payload`; the
- * server reads the three it knows and ignores the rest.
+ * `qd:ch`, never acknowledged: `[service, channel, payload]`. A client drops
+ * a message rather than queue it while its connection is backed up: not
+ * Socket.IO's volatile flag, which drops a message whenever a write is in
+ * flight. A later revision may append elements after `payload`; the server
+ * reads the three it knows and ignores the rest.
  */
 export type ChannelFrame<Payload = unknown> = readonly [
   s: string,

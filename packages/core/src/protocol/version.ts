@@ -133,8 +133,15 @@ export const PEER_RELAY_BYTES_PER_SECOND = 1_048_576;
 /** Relay bytes one socket may send at once, after a pause. */
 export const PEER_RELAY_BYTES_BURST = 2_097_152;
 
-/** Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it. */
+/** Relay messages and volatile frames waiting for a socket past which a `fast` or volatile one is dropped. */
 export const PEER_RELAY_FAST_BACKLOG = 64;
+
+/**
+ * Bytes a client's WebSocket, or a peer link's `fast` data channel, holds
+ * unsent past which quickdraw's client drops a channel message or a `fast`
+ * link message on it rather than queue it.
+ */
+export const FAST_BACKLOG_BYTES = 32_768;
 
 /**
  * Each socket's lane of subscription events (`qd:sub`, `qd:col:sub`,

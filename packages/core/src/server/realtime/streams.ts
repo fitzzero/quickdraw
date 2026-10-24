@@ -5,9 +5,10 @@
 // schema does not name) is kept in the scope's seed when the stream declares
 // one (`seeds.ts`), and sent to the feed's room as `qd:stream [service,
 // stream, scope, item]` (`scope` null for a global stream: positional, so a
-// frame at a game's tick rate carries no key names), volatile when the stream
-// says so. A push is synchronous and logs nothing: it may run at a game
-// loop's tick rate.
+// frame at a game's tick rate carries no key names). A volatile stream's
+// frame skips a socket while its connection is backed up (`backlog.ts`),
+// never because another frame went to it in the same tick. A push is
+// synchronous and logs nothing: it may run at a game loop's tick rate.
 //
 // `pushMany(scope, items)` (`pushMany(items)`) is the batch form: every item
 // is checked before any is kept or sent, then each goes out as its own frame
@@ -15,12 +16,14 @@
 // it applies single pushes.
 //
 // Behind a cluster adapter a stream that keeps a seed is pushed to every
-// node of its deployment instead (`serverSideEmit`, the same one publish a room broadcast
-// costs), and each node keeps the items in its own seed and sends them to its
-// own sockets in the feed's room, in one step: a subscriber on any node gets
-// the latest items as its seed, and an item is either in the seed a
-// subscriber gets or sent to it after, never both and never neither. A stream
-// without a seed goes out through the adapter's room broadcast as before.
+// node of its deployment instead (`serverSideEmit`, the same one publish a
+// room broadcast costs), and each node keeps the items in its own seed and
+// sends them to its own sockets in the feed's room, in one step: a
+// subscriber on any node gets the latest items as its seed, and an item is
+// either in the seed a subscriber gets or sent to it after, never both and
+// never neither. A volatile stream goes the same way, since only the node
+// that holds a socket knows its backlog. Any other stream goes out through
+// the adapter's room broadcast as before.
 //
 // `subscribers(scope)` (`subscribers()`) counts the sockets in the feed's
 // room on every node, anonymous ones included, so a job can skip the work

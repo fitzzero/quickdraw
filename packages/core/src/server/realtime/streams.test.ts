@@ -5,7 +5,9 @@
 // the access engine (a stream without one is closed); malformed frames,
 // unknown names and scopes that do not fit are refused; an unsubscribe stops
 // the frames, even one that arrives while the subscribe is being
-// authorized; and `push` checks what it sends.
+// authorized; `push` checks what it sends; and a volatile stream drops an
+// item for a socket only while its connection is backed up, never one
+// pushed in the same tick as another write to it.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -14,6 +16,7 @@ import { defineContract } from "../../contract/defineContract";
 import type { Logger } from "../../contract/logger";
 import type { StreamFrame } from "../../protocol/envelope";
 import { QuickdrawError } from "../../protocol/errors";
+import { PEER_RELAY_FAST_BACKLOG } from "../../protocol/version";
 import { createHarness, type Harness } from "../../prisma/__tests__/harness";
 import { connectV5 } from "../../testing/socket";
 import {
@@ -860,6 +863,61 @@ describe("a seed the service computes", () => {
       ok: true,
       seed: ["welcome"],
     });
+  });
+});
+
+describe("a volatile stream", () => {
+  it("sends every item pushed in one tick: one to each of eight scopes a socket holds", async () => {
+    const scopes = Array.from({ length: 8 }, (_, n) => `w${String(n + 1)}`);
+    const worlds = new Map<string, unknown>(scopes.map((id) => [id, { tick: 0, food: [] }]));
+    const app = await startWorlds(worlds, []);
+    const { connection, items } = await connect(app, as(board.cy));
+    for (const scope of scopes) {
+      expect(await streamSub(connection, "world", scope, "worldService")).toMatchObject({
+        ok: true,
+      });
+    }
+    // A poll's prices or a game's worlds: one push per scope, in one tick.
+    const world = app.server.stream(worldContract, "world");
+    for (const scope of scopes) {
+      world.push(scope, { tick: 1, food: [scope] });
+    }
+    await settle(connection);
+    expect(items.map((frame) => frame[2])).toEqual(scopes);
+  });
+
+  it("sends an item pushed in the tick a method's answer goes out to the socket", async () => {
+    const app = await start();
+    const connection = await app.connect(as(board.cy));
+    const items = frames<StreamFrame>(connection, "qd:stream");
+    expect(await streamSub(connection, "ticks")).toEqual({ ok: true, seed: [] });
+    // Pushed as the answer is handed to the transport, which is then busy with it: Socket.IO's
+    // volatile flag dropped every frame sent while a write was in flight.
+    const socket = app.server.io.sockets.sockets.get(connection.socket.id ?? "");
+    socket?.conn.once("drain", () => {
+      app.server.stream(liveContract, "ticks").push(1);
+    });
+    expect(await connection.call.taskService.whereAmI({ room: LOBBY })).toMatchObject({ size: 0 });
+    await settle(connection);
+    expect(items).toEqual([["taskService", "ticks", null, 1]]);
+  });
+
+  it(`drops an item for a socket while ${String(PEER_RELAY_FAST_BACKLOG)} wait on its connection, until it drains`, async () => {
+    const app = await start();
+    const { connection, items } = await connect(app, as(board.cy));
+    expect(await streamSub(connection, "ticks")).toEqual({ ok: true, seed: [] });
+    const ticks = app.server.stream(liveContract, "ticks");
+    ticks.pushMany(Array.from({ length: 100 }, (_, n) => n));
+    await settle(connection);
+    // The first goes to the idle transport at once, the next 64 wait for it, the other 35 are
+    // dropped: counted before each is sent, since the first one's drain comes inside its emit.
+    expect(items.map((frame) => frame[3])).toEqual(
+      Array.from({ length: PEER_RELAY_FAST_BACKLOG + 1 }, (_, n) => n),
+    );
+    // Once its connection handed them to the transport, the socket takes items again.
+    ticks.push(100);
+    await settle(connection);
+    expect(items.at(-1)).toEqual(["taskService", "ticks", null, 100]);
   });
 });
 

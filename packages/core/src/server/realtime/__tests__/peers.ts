@@ -75,7 +75,7 @@ export interface Peer<C extends Connected = Connected> {
     to: string,
     sig: PeerSignal | Record<string, unknown>,
   ): Promise<Ok | Failure>;
-  /** Sends `qd:relay`, plainly: the client sends `fast` volatile, which Socket.IO may drop on the client. */
+  /** Sends `qd:relay`, as the client does, with none of its drops: no rates, no backlog check. */
   relay(room: string, to: string, label: PeerLabel, text: string): void;
 }
 

@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PeerSignalFrame } from "../../protocol/envelope";
-import { MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
+import { FAST_BACKLOG_BYTES, MAX_PEER_MESSAGE_BYTES } from "../../protocol/version";
 import { controlOf, PING_MS, QUICK_PINGS, WATCHDOG_MS } from "./core";
 import { DEFAULT_PEER_LIMITS, PENDING_MS } from "./hub";
 import {
@@ -25,7 +25,7 @@ import {
   type PeerLinkOptions,
   type PeerRequest,
 } from "./link";
-import { DISCONNECTED_GRACE_MS, FAST_BACKLOG_BYTES } from "./rtc";
+import { DISCONNECTED_GRACE_MS } from "./rtc";
 import type { PeerLink, PeerLinkEvents } from "./types";
 import { createFakeNetwork, type FakeNetwork } from "./__tests__/fakeRtc";
 import { helloOf, Wire, type ConnectOptions, type FakeConnection } from "./__tests__/fakeWire";

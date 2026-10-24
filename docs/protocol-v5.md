@@ -232,7 +232,7 @@ client sends an ack id.
 | `qd:unwatch`      | `WatchFrame`             | `Ok \| Failure`, when asked | Leaves a watched topic.                                                                                     |
 | `qd:stream:sub`   | `StreamSubscribe`        | `StreamSubscribeReply`      | Subscribes to a stream and receives its seed.                                                               |
 | `qd:stream:unsub` | `StreamSubscribe`        | `Ok \| Failure`, when asked | Unsubscribes from a stream.                                                                                 |
-| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, sent volatile: `[s, channel, payload]`.                                  |
+| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, dropped while the connection is backed up: `[s, channel, payload]`.      |
 | `qd:peer`         | `PeerSignalFrame`        | `Ok \| Failure`, when asked | A peer link's signal to another socket of an app room: `{ room, to, sig }`.                                 |
 | `qd:relay`        | `RelayFrame`             | none                        | A peer link's message for the server to relay: `[room, to, label, text]`, dropped on `fast` when backed up. |
 
@@ -285,10 +285,12 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   `VALIDATION`.
 - Send `qd:ch` and forget it: there is no acknowledgement and no error, so
   never wait for one, and drop a message rather than queue it while the
-  connection is backed up (Socket.IO calls that volatile). The server drops
-  a message silently when it is over the channel's rate, fails its schema,
-  or fails its `requires`, and ends the socket of a client that keeps
-  sending far over a channel's rate (below).
+  connection is backed up: not Socket.IO's volatile flag, which drops a
+  message whenever a write is in flight, so of the messages sent in one
+  tick it keeps only the first. The server drops a message silently when
+  it is over the channel's rate, fails its schema, or fails its
+  `requires`, and ends the socket of a client that keeps sending far over
+  a channel's rate (below).
 - Apply `qd:e` and `qd:c` frames by `rev`, not by arrival: behind a
   cluster, frames from two nodes can arrive out of order.
 - App rooms are per socket. A method joins the socket that called it
@@ -352,12 +354,12 @@ offer: its peer moves to the relay on hearing it.
    it and heard it. Through the relay a `PeerMessage` travels as the
    `text` of `qd:relay`. On `fast`, drop one rather than queue it
    while your connection is backed up; the server drops one while the
-   receiver's is (`PEER_RELAY_FAST_BACKLOG` relay messages waiting). A
-   side whose direct path lost a data channel (it closed, rather than ICE
-   failing) waits `BYE_WAIT_MS` for the peer's bye before it says
-   `{ relay: true }`: a peer that closes its link closes its data
-   channels too, and a `{ relay: true }` it hears after that asks it for
-   a new link.
+   receiver's is (`PEER_RELAY_FAST_BACKLOG` relay messages and volatile
+   stream frames waiting). A side whose direct path lost a data channel
+   (it closed, rather than ICE failing) waits `BYE_WAIT_MS` for the
+   peer's bye before it says `{ relay: true }`: a peer that closes its
+   link closes its data channels too, and a `{ relay: true }` it hears
+   after that asks it for a new link.
 4. Read link messages from both paths all along: the peer may move to the
    relay before you hear it say so. A link that opens on no path within
    `OPEN_TIMEOUT_MS` is over.
@@ -888,7 +890,10 @@ One of:
 no key names: `scope` is `null` for a global stream. The positions are
 fixed; a later revision may append elements after `item`, never insert
 them, so a client reads the four it knows and ignores the rest. Before
-`5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
+`5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`. A volatile
+stream's frame is dropped for a socket while its connection is backed up
+(`PEER_RELAY_FAST_BACKLOG` messages waiting for it): not Socket.IO's
+volatile flag, which drops a message whenever a write is in flight.
 
 A JSON array:
 
@@ -901,9 +906,11 @@ A JSON array:
 
 #### `ChannelFrame`
 
-`qd:ch`, sent volatile and never acknowledged: `[service, channel,
-payload]`. A later revision may append elements after `payload`; the
-server reads the three it knows and ignores the rest.
+`qd:ch`, never acknowledged: `[service, channel, payload]`. A client drops
+a message rather than queue it while its connection is backed up: not
+Socket.IO's volatile flag, which drops a message whenever a write is in
+flight. A later revision may append elements after `payload`; the server
+reads the three it knows and ignores the rest.
 
 A JSON array:
 
@@ -1351,7 +1358,7 @@ peer links, which announces them in `limits.peers`.
 | `PEER_RELAY_BURST`            | 240 messages                              | Relay messages one socket may send to one peer at once, after a pause.                                    |
 | `PEER_RELAY_BYTES_PER_SECOND` | 1048576 bytes a second per socket         | Relay bytes one socket may send per second, to all its peers together; more are dropped.                  |
 | `PEER_RELAY_BYTES_BURST`      | 2097152 bytes                             | Relay bytes one socket may send at once, after a pause.                                                   |
-| `PEER_RELAY_FAST_BACKLOG`     | 64 relay messages waiting                 | Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it.           |
+| `PEER_RELAY_FAST_BACKLOG`     | 64 messages waiting                       | Relay messages and volatile frames waiting for a socket past which a `fast` or volatile one is dropped.   |
 
 These are defaults. An app changes the socket rate limiter with
 `createServer({ rateLimit })` and a channel's rate with its contract's

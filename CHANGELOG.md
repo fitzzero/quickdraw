@@ -379,6 +379,17 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   (CLIENT-1). The GDScript reference client connects again after an
   `INTERNAL` refusal the same way, with its backoff, and does not emit
   `refused` for it.
+- **Behavior change: `useChannel` sends every message of a burst.** `send`
+  emitted `qd:ch` with Socket.IO's volatile flag, which drops a message
+  whenever a write is in flight, and engine.io marks its transport busy
+  from each write until the next tick: of three messages sent in one
+  handler or effect, the server got the first. `send` now drops a message
+  only while the connection is backed up (64 packets waiting to be sent,
+  or more than 32 KiB unsent in the WebSocket), the rule a peer link's
+  `fast` relay messages already followed, and otherwise sends it: of a
+  burst, 64 go out, and the rest are dropped until the connection has sent
+  them (on a WebSocket, by the next tick). It still drops one until the
+  socket's own hello, as before.
 
 ### Server
 
@@ -740,6 +751,39 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `upsert` with an empty `update` (whose existence read used to run in the
   transaction) too: a test that makes one there runs into the
   transaction's timeout; write it through `tx`.
+- **Behavior change: a volatile stream drops an item only while the
+  socket's connection is backed up.** Its frames went out with Socket.IO's
+  volatile flag, which drops a frame whenever a write to that socket is in
+  flight, and its transport stays busy from each write until it is done:
+  of the items pushed in one tick a subscriber got the first (in
+  production, 1 of 8 prices per poll), and an item pushed right after any
+  other frame or answer to the socket, in the same tick, never arrived. A
+  volatile frame now skips a socket only while 64 relay messages and
+  volatile frames sent to it wait on its connection: the count the peer
+  links' relay kept for its `fast` messages, now shared by both. Of a
+  burst, a socket on a free connection gets 65 items (one goes at once, 64
+  wait for it), and the rest are dropped until the connection sends what
+  waits: push a snapshot instead of a bigger burst. Behind a cluster
+  adapter a volatile stream's items now go to every node as a seeded
+  stream's do (`quickdraw:stream-push`, tagged with the deployment), with
+  their binary values beside them (next entry), and each node sends them
+  to its own sockets, checking each one, instead of through the adapter's
+  room broadcast. During a rolling deploy a node of an earlier version
+  still sends with the flag.
+- **A stream's binary items reach the other nodes as binary.** On a server
+  that sends binary (`createServer({ binary: true })`), a push goes to the
+  other nodes as a server-side event, which Socket.IO's Redis adapter sends
+  as JSON, unlike its room broadcasts: behind it a seeded stream's `Buffer`
+  item reached the other nodes' subscribers, and their seeds, as
+  `{ type: "Buffer", data: [...] }`, a `Uint8Array` as an object of its
+  indexes and an `ArrayBuffer` as `{}`, and a volatile stream's would have
+  too now that it goes the same way. The sending node now takes each
+  binary value (an `ArrayBuffer` or a view of one) out of the items, sends
+  it beside them by its place, its kind and its bytes in base64, and the
+  receiving node puts it back, so a subscriber on any node gets the item as
+  a subscriber on the pushing node does. A server that sends JSON only does
+  none of it. During a rolling deploy a node of an earlier version gets
+  `null` in each binary value's place from a node of this version.
 
 ### Testing
 
