@@ -702,7 +702,6 @@ function listenToSocket(wiring: Wiring): void {
     }
   });
   socket.on("disconnect", (reason: unknown) => {
-    session.hold.unconfirm();
     const status = socket.active ? "connecting" : lifecycle.stoppedStatus();
     // The server ended the session: who it was is no longer known.
     const ended = isServerDisconnect(reason);

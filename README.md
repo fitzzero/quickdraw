@@ -1804,6 +1804,19 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `optimistic: (input, cache) => ...` writes its own layers with
   `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
   `addItem` and `addEntity` (below).
+- Every call, a hook's, `qd.<service>.<method>.call()` or `call`, reads and
+  writes alike, is bound as it is made to the user it is made as, and goes
+  out only on a socket whose own hello names that user. A socket speaks
+  for whoever its credentials named when it connected, which a session
+  cookie can change unseen (another tab signs someone else in), and only
+  its hello says whom. So from the first connect, or a drop, until the
+  socket's hello, quickdraw holds calls itself, never in Socket.IO's send
+  buffer, and the hello sends them, in the order they were made, or fails
+  `CANCELLED` each one made as someone else. `setAuth`, `close` and a
+  refused session fail the calls held `CANCELLED`; one whose time runs out
+  first fails `INTERNAL`, unsent. The reads that resume live rows and
+  collections still go at the connect: their answers follow the hello, and
+  a hello naming another user drops them.
 - A mutation hook's call is bound, as it is made, to the user it is made as
   and to the credentials it is made under, and each attempt is checked
   before it goes out: one whose user changed first (`setAuth` in the same
@@ -1816,15 +1829,11 @@ export function TaskDetail({ id }: { readonly id: string }) {
   call made after the server ended the session is sent only if the next
   hello comes under the same credentials (a cookie that signs in again)
   and names that session's user; new credentials (`setAuth`) refuse it,
-  even for that user. A refused item's `retry()` sends
-  again as the user who made the call, and when this check stops it the
-  item shows in `refused` again, with the `CANCELLED`. Three cases are not
-  covered yet, each at a reconnect whose credentials (a cookie) now name
-  another user: `qd.<service>.<method>.call()`, which emits at once; a hook
-  call already waiting in Socket.IO's send buffer; and an attempt that
-  starts between the reconnect's connect and its hello, which is checked
-  against the last hello (a drop keeps it). Each goes out as whoever the
-  new socket speaks for.
+  even for that user. A first connect the server refuses ends a session
+  no hello named: whoever signs in next under the same credentials claims
+  a call made after it. A refused item's `retry()` sends again as the user
+  who made the call, and when this check stops it the item shows in
+  `refused` again, with the `CANCELLED`.
 - A mutation hook shows a call (its `data`, `error`, `variables` and
   status) only to the user it is made as, while the server's hello names
   them. A component that stays mounted while the user changes shows the
@@ -1836,7 +1845,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   (before the first, while new credentials await theirs, after the server
   ended the session) becomes the call of the user the next hello under the
   same credentials names, even once it settled (after a session the server
-  ended, only if it names that session's user again). It shows, pending
+  ended, only if it names that session's user again, and after a refused
+  first connect, whoever signs in). It shows, pending
   and then its answer or error, while no hello is held under the same
   credentials, and once one is, only to that user: one the hello did not
   make anyone's (another user's cookie after the session ended) shows to
@@ -1880,8 +1890,8 @@ export function TaskDetail({ id }: { readonly id: string }) {
   whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
   `useCollection` and a search's held scope show nothing of another row,
   scope or user while a new id, scope or user loads. A mounted mutation
-  hook shows the next user none of the last user's calls, nor sends them as
-  the next user, but for the three reconnect cases above.
+  hook shows the next user none of the last user's calls, and no call is
+  sent as the next user (above).
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.

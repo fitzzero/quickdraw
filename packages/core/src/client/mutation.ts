@@ -24,10 +24,10 @@
 // optimistic update runs, and is not retried. A refused item's `retry()`
 // keeps the ticket of the call it sends again; refused so, the item shows
 // in `refused` again unless the cache was emptied meanwhile
-// (`liveHooks.ts`). A call already in Socket.IO's send buffer at a
-// reconnect, and an attempt that starts between a reconnect's connect and
-// its hello, are not caught here when a cookie names another user then
-// (the reconnect card's).
+// (`liveHooks.ts`). This check runs against the hello the connection holds,
+// which a drop keeps; the socket half is `call()`'s, which holds a call
+// made while its socket has no hello of its own and sends it only if that
+// hello names the call's user (a cookie may name someone else).
 //
 // The result shows a call's `data`, `error`, `variables` and status only to
 // the user it is made as, while a hello names them, or, for a call no hello

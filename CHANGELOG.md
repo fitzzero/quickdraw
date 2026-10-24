@@ -284,13 +284,39 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   no hello is held now shows while none is held (it showed idle until the
   next hello, and a failure before any hello was never shown), so a slow
   first connect shows the call pending, and a call after the server ended
-  the session shows its failure to the signed-out page. **Not covered
-  yet**, each the reconnect card's: `qd.<service>.<method>.call()`, which
-  is unchanged and emits at once; a hook call already in Socket.IO's send
-  buffer when a reconnect's cookie names another user, which goes out as
-  them; and an attempt that starts between a reconnect's connect and its
-  hello, which is checked against the last hello (a drop keeps it) and
-  goes out on the new socket, as whoever its cookie names.
+  the session shows its failure to the signed-out page. A call made while
+  the socket is down, or between a reconnect's connect and its hello, is
+  held for that hello, `.call()` included (below).
+- **A call goes out only on a socket whose own hello names its user.** A
+  socket speaks for whoever its credentials named when it connected, which
+  a session cookie can change unseen (another tab's sign-in), and a call
+  made while it was down waited in Socket.IO's send buffer, which the next
+  connect flushed before the new socket's `qd:hello`: once a cookie named
+  Ed at a reconnect, Ada's `.call()` write ran as Ed with her input and her
+  code got his answer, a `.call()` read handed her his, and a hook's call
+  was saved as him; an attempt that started between a reconnect's connect
+  and its hello passed #154's check against the hello a drop keeps, and
+  went out on Ed's socket. Every call (`call`, `callData`, a member's
+  `.call()`, the hooks') is now bound, as it is made, to the user it is
+  made as (#154's tickets), and goes out only on a confirmed socket:
+  connected, and its own hello in. From a connect or a drop until that
+  hello the connection holds calls itself, never in Socket.IO's buffer,
+  and the hello sends each one whose user it names, oldest first and
+  before anything else it sets off (the joins it runs, a first hello's
+  resume), and fails the rest `CANCELLED` ("The user changed before the
+  call was sent"). Reads are held like writes. `setAuth`, `close` and a
+  refused session fail the held calls `CANCELLED`, as they failed the
+  buffered ones; one whose time runs out while held fails `INTERNAL`,
+  unsent, as one that timed out in the buffer did. **Behavior change:** a
+  call made before the first hello now goes out after it, and the reads
+  that resume live rows and collections, still sent from the connect, may
+  go before or after the calls held across a drop (they went after
+  Socket.IO's buffer): both catch up, since a write's change reaches the
+  subscription the resume set up, and their answers follow the hello,
+  which drops them if it names another user. A first connect the server
+  refuses ends a session no hello named, so whoever signs in next claims a
+  call made after it (the README now says so). A ticket made with no hello
+  also stops waiting once other credentials come first.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its
@@ -330,8 +356,8 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   connection connects again itself, after Socket.IO's own reconnection
   delays (the manager's `reconnectionDelay`, doubling to
   `reconnectionDelayMax`, with `randomizationFactor`'s jitter), as often as
-  its `reconnectionAttempts` allow. Calls and reads made meanwhile wait in
-  the send buffer, as while Socket.IO reconnects. With Socket.IO's
+  its `reconnectionAttempts` allow. Calls and reads made meanwhile are held
+  for the socket's hello, as while Socket.IO reconnects. With Socket.IO's
   reconnection off, or its attempts spent, the connection is `refused`
   with `refusal: { code: "INTERNAL" }`, and still keeps the user.
   `UNAUTHENTICATED`, `FORBIDDEN` and the server's disconnect still sign out

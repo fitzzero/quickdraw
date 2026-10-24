@@ -94,11 +94,14 @@ export interface HeldCall {
 
 /** The calls one connection holds until its socket is confirmed. */
 export interface CallHold {
-  /** True from the socket's hello until it connects again or drops: a call may go out on it. */
+  /**
+   * True from the socket's hello until it connects again: a call may go out
+   * on it while it is connected too (a dropped socket is not).
+   */
   readonly confirmed: boolean;
   /** How many calls it holds. */
   readonly size: number;
-  /** The socket connected, or dropped: its hello is awaited again. */
+  /** The socket connected: a new socket, whose own hello is awaited. */
   unconfirm(): void;
   /**
    * The socket's hello: confirms the socket, then tells every held call,

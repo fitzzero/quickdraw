@@ -8,11 +8,13 @@
 import { describe, expect, it } from "vitest";
 import { QuickdrawError } from "../protocol/errors";
 import type { HelloFrame } from "../protocol/version";
-import type { QuickdrawConnection } from "./connection";
+import { createQuickdrawConnection, type QuickdrawConnection } from "./connection";
 import {
   checkedTicket,
   createTickets,
+  isCheckRefusal,
   isUserChange,
+  refusalAt,
   sendable,
   shownTo,
   ticketOf,
@@ -85,6 +87,53 @@ describe("ticketOf", () => {
     // Later hellos change nothing: the call ran on Ed's socket.
     set(fakeHello("ada"));
     expect(issued.user()).toBe("ed");
+  });
+});
+
+describe("a ticket issued with no hello", () => {
+  it("hears its socket's hello when the hold asks, before its listener on the connection does", () => {
+    const { connection, set, listening } = helloConnection(null);
+    const issued = ticketOf(connection);
+    issued.hear(fakeHello("ada"));
+    expect(issued.user()).toBe("ada");
+    expect(issued.waiting()).toBe(false);
+    expect(listening()).toBe(0);
+    set(fakeHello("ed"));
+    expect(issued.user()).toBe("ada");
+  });
+
+  it("is nobody's once other credentials come before any hello, and stops waiting for one", () => {
+    // Never opened: new credentials move its epoch without a socket.
+    const connection = createQuickdrawConnection({ url: "http://127.0.0.1:9" });
+    try {
+      const issued = ticketOf(connection);
+      expect(issued.waiting()).toBe(true);
+      connection.setAuth({ principal: { userId: "ed" } });
+      expect(issued.waiting()).toBe(false);
+      expect(issued.user()).toBeUndefined();
+    } finally {
+      connection.close();
+    }
+  });
+});
+
+describe("refusalAt", () => {
+  it("lets a call go on a socket whose hello names its user, and refuses it on one that names another", () => {
+    const { connection } = helloConnection(fakeHello("ada"));
+    expect(refusalAt(ticket("ada"), fakeHello("ada"), connection)).toBeUndefined();
+    const refusal = refusalAt(ticket("ada"), fakeHello("ed"), connection);
+    expect(refusal).toMatchObject({
+      code: "CANCELLED",
+      message: "The user changed before the call was sent",
+    });
+    // Never retried, but not the hook's own check: its optimistic update ran.
+    expect(isUserChange(refusal)).toBe(true);
+    expect(isCheckRefusal(refusal)).toBe(false);
+  });
+
+  it("lets a call issued with no hello go once that hello claims it", () => {
+    const { connection } = helloConnection(null);
+    expect(refusalAt(ticketOf(connection), fakeHello("ed"), connection)).toBeUndefined();
   });
 });
 
@@ -210,6 +259,7 @@ describe("checkedTicket", () => {
         message: "The user changed before the call was sent",
       });
       expect(isUserChange(refusal)).toBe(true);
+      expect(isCheckRefusal(refusal)).toBe(true);
     }
     expect(isUserChange(new QuickdrawError("CANCELLED", "Another cancel"))).toBe(false);
   });
