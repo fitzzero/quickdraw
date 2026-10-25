@@ -3,6 +3,7 @@
 // This file runs under Node, so everything here also runs with `document`
 // undefined, as in React Native.
 
+import { QueryClient } from "@tanstack/react-query";
 import { renderToString } from "react-dom/server";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,9 +33,8 @@ afterEach(() => {
 });
 
 /** A connection as `userId`, its query client and live data, and the frames it sends from now on. */
-async function client(url: string, userId: string) {
+async function client(url: string, userId: string, queryClient = freshClient()) {
   const connection = await live.connect(url, as(userId));
-  const queryClient = freshClient();
   return {
     connection,
     queryClient,
@@ -51,6 +51,12 @@ function entityOf(c: Client, id: string): EntityEntry<{ readonly title?: string 
 
 function scopeOf(c: Client, collection: string, scope: string): CollectionEntry | undefined {
   return c.queryClient.getQueryData(collectionKey("taskService", collection, scope));
+}
+
+function itemOf(c: Client, collection: string, scope: string, id: string) {
+  return scopeOf(c, collection, scope)?.state?.byId.get(id) as
+    | { readonly title?: string }
+    | undefined;
 }
 
 function hasState(c: Client, collection: string, scope: string): boolean {
@@ -411,6 +417,39 @@ describe("live collections", () => {
       scopes.map(() => "FORBIDDEN"),
     );
     expect(ada.connection.backoffRemaining("subscription")).toBe(0);
+  });
+});
+
+describe("held without a hook", () => {
+  // A `QueryClient` in Node collects nothing unless told to (its `gcTime` is infinite on a
+  // server); a browser's and React Native's collect after five minutes.
+  const GC_TIME = 200;
+
+  it("keeps a scope and a row past the QueryClient's gcTime, and applies the next write to both without loading either again", async () => {
+    const { app, reads, write } = await live.start();
+    const board = live.board();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: GC_TIME } } });
+    const ada = await client(app.url, board.ada, queryClient);
+    ada.data.collections.subscribe(targetOf("byProject"), board.p1);
+    ada.data.entities.subscribe("taskService", [board.t1]);
+    await until(
+      () => hasState(ada, "byProject", board.p1) && entityOf(ada, board.t1)?.data !== undefined,
+    );
+    const pageReads = (): number => reads.filter((read) => read.args.take !== undefined).length;
+    const before = pageReads();
+    await tick(3 * GC_TIME);
+    expect(itemOf(ada, "byProject", board.p1, board.t1)?.title).toBe("T1");
+    expect(entityOf(ada, board.t1)?.data?.title).toBe("T1");
+
+    await write((db) => db.task.update({ where: { id: board.t1 }, data: { title: "Renamed" } }));
+    await until(
+      () =>
+        entityOf(ada, board.t1)?.data?.title === "Renamed" &&
+        itemOf(ada, "byProject", board.p1, board.t1)?.title === "Renamed",
+    );
+    expect(pageReads()).toBe(before);
+    expect(framesOf(ada.sent, "qd:col:sub")).toHaveLength(1);
+    expect(framesOf(ada.sent, "qd:sub")).toHaveLength(1);
   });
 });
 

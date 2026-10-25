@@ -33,6 +33,13 @@ export interface LiveCache {
   /** Writes the entry under `key` whole, telling whoever shows it. */
   set(key: LiveKey, value: unknown): void;
   /**
+   * The store holds the row or scope of `key` from now on: its first holding
+   * began (`registry.ts`). The entry is kept until `release`, from before the
+   * store writes it: a row or scope held again while its entry is cached may
+   * be answered with what the entry holds, and written nothing.
+   */
+  hold(key: LiveKey): void;
+  /**
    * The store no longer holds the row or scope of `key`: its last holding
    * ended a tick ago (`registry.ts`), and nothing writes the entry until it
    * is held again.
