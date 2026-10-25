@@ -1555,6 +1555,41 @@ describe("quickdraw's mutations in TanStack's mutation cache across a switch of 
     expect(lines.at(-1)).toEqual(["ed", "mutating=0 states=[]"]);
   });
 
+  it.each([
+    ["under quickdraw's key", { meta: { feature: "notes" } }, "qd"],
+    [
+      "under a key of its own",
+      { mutationKey: ["notes-of-the-app"], meta: { feature: "notes" } },
+      "notes-of-the-app",
+    ],
+  ])(
+    "takes out the calls of a hook given a meta of its own, %s, the app's meta kept beside the mark",
+    async (_where, options, root) => {
+      const own: CacheLines = [];
+      const { view, calls } = await watched(
+        undefined,
+        <CacheSeen lines={own} root={root} />,
+        options,
+      );
+      act(() => {
+        send(calls, "ada-note");
+      });
+      await cacheShows(own, "mutating=0 states=[success:ada-note]");
+      expect(
+        view.queryClient
+          .getMutationCache()
+          .getAll()
+          .map((cached) => cached.meta),
+      ).toEqual([{ feature: "notes", qd: true }]);
+      act(() => {
+        view.connection.setAuth({ principal: { userId: "ed" } });
+      });
+      await helloFor(view, "ed");
+      await settle();
+      expect(own.at(-1)).toEqual(["ed", "mutating=0 states=[]"]);
+    },
+  );
+
   it("takes out the calls of a hook given a key of its own", async () => {
     const own: CacheLines = [];
     const { view, calls } = await watched(
