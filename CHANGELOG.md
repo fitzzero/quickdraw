@@ -652,11 +652,11 @@ get=ada-note rename=success data=ada-input vars=ada-input`, and a
   placeholder of a result the cache no longer holds. Under a `$Provider`
   with a `session` prop, the hooks follow that session; the one cache
   follows the mock's own. It does not model two of the real client's
-  rules: a mutation attempt that starts while new credentials await their
-  hello calls its stub where the real client refuses it `CANCELLED`, and
-  calls are not held until the socket's hello. **Behavior change:** a mock
-  made with `isKnown: false` no longer reads before
-  `$session({ isKnown: true })`, and the same user known again after
+  rules: a mutation made before new credentials whose attempt starts while
+  they await their hello calls its stub where the real client refuses it
+  `CANCELLED`, and calls are not held until the socket's hello.
+  **Behavior change:** a mock made with `isKnown: false` no longer reads
+  before `$session({ isKnown: true })`, and the same user known again after
   `isKnown: false` reads its queries again, so `calls` counts that read.
 - **`withSavepoints` lets a nested transaction run on PGlite.** Prisma 7
   runs `tx.$transaction(...)` inside an interactive transaction as a
