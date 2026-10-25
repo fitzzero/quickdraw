@@ -1,52 +1,46 @@
-// The MCP HTTP routes (RFC 0003 section 10), ported from 4.1's
-// `createMcpRoutes` (4.1 `src/server/mcp/McpHttpRoutes.ts:12`) onto the
-// registry, keeping its wire format:
+// The MCP HTTP router (RFC 0003 section 10): MCP's Streamable HTTP
+// transport at `{path}` itself (`streamable.ts`: stateless, JSON-only
+// JSON-RPC, what MCP clients such as Claude Code connect to), and beside it
+// 4.1's REST routes, `GET {path}/tools` and `POST {path}/invoke`
+// (`rest.ts`). Like the HTTP transport, the router is a plain Node request
+// handler rather than an `express.Router`, so it mounts with
+// `app.use(router)` on Express 4 or 5 and also serves a bare Node server.
 //
-//   GET  {path}/tools    ->  { tools }
-//   POST {path}/invoke   { service, method, payload }  ->  { success: true, data }
-//
-// `invoke` also takes `{ name, arguments }`, which reaches every tool, the
-// app's own included. Like the HTTP transport, the routes are a plain Node
-// request handler rather than an `express.Router`, so they mount with
-// `app.use(router)` on Express 4 or 5 and also serve a bare Node server.
-//
-// What changed from 4.1: the registry's `principal` hook decides who a bearer
-// token stands for, and a request without one is anonymous (only `"public"`
-// methods and custom tools pass) where 4.1 refused it; a token the hook
-// refuses is answered 401, and a hook that fails otherwise (its token store
-// down) 500 (`session.ts`); a failure answers with its error code's HTTP
-// status and `{ success: false, error, code, data? }` where 4.1 answered 500
-// and `{ error }`; `invoke` needs `Content-Type: application/json`, as every
-// HTTP transport call does; and a client that goes away cancels its call.
-// Each request is a session of its own, and its queries share the lane of
-// its caller: its bearer token, its user without a token, or its address
-// when anonymous (`lanes.ts`). A request from a web page is refused unless
-// `allowedOrigins` lists its origin, and with `allowedHosts` a request for
-// another `Host` (`httpRequest.ts`).
+// Every route is behind one gate, checked here before any of them runs: a
+// request from a web page is refused unless `allowedOrigins` lists its
+// origin, and with `allowedHosts` a request for another `Host`
+// (`httpRequest.ts`). Both calling routes then read the body within
+// `maxBodyBytes`, make each request a session of its own (`requestOf`),
+// whose queries share the lane of its caller: its bearer token, its user
+// without a token, or its address when anonymous (`lanes.ts`), and call
+// through `registry.call`, whose `principal` hook says who the token stands
+// for (`session.ts`); a client that goes away cancels its call.
 
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { consoleLogger, type Logger } from "../../contract/logger";
-import {
-  httpStatus,
-  INTERNAL_MESSAGE,
-  QuickdrawError,
-  toWire,
-  type ErrorCode,
-} from "../../protocol/errors";
+import { INTERNAL_MESSAGE, QuickdrawError } from "../../protocol/errors";
+import { QUICKDRAW_VERSION } from "../../version";
 import { describeError } from "../pipeline/metrics";
-import { unreadable } from "../transports/ack";
-import { isJsonRequest, readJsonInput, type HttpRequest } from "../transports/body";
 import type { HttpRouter } from "../transports/http";
-import { requestGate, requestOf, type AllowedOrigin, type RequestGate } from "./httpRequest";
+import { requestGate, type AllowedOrigin, type RequestGate } from "./httpRequest";
 import type { McpRegistry } from "./registry";
-import type { McpCallOptions, McpCallResult } from "./types";
+import { failure, invoke, listTools, sendResult } from "./rest";
+import { refuse, serveEndpoint } from "./streamable";
 
 /** Options of {@link createMcpHttpRouter}. */
 export interface McpHttpRouterOptions {
   /** The tools to serve. */
   readonly registry: McpRegistry;
-  /** The prefix of the routes: `GET {path}/tools` and `POST {path}/invoke`. Default `"/mcp"`, as in 4.1. */
+  /**
+   * Where the routes are: the Streamable HTTP endpoint at `{path}` itself,
+   * and 4.1's `GET {path}/tools` and `POST {path}/invoke`. Default `"/mcp"`,
+   * as in 4.1.
+   */
   readonly path?: string;
+  /** The server's name, sent in `initialize`'s `serverInfo`. Default `"quickdraw"`. */
+  readonly name?: string;
+  /** The server's version, sent in `initialize`'s `serverInfo`. Default: quickdraw-core's. */
+  readonly version?: string;
   /**
    * The largest request body read, in bytes. Default 1 MiB. A body the app's
    * own JSON parser already read (`express.json()`) is used as it is.
@@ -72,154 +66,40 @@ export interface McpHttpRouterOptions {
   readonly allowedHosts?: readonly string[];
 }
 
-/** What `invoke` answers: 4.1's `{ success, data }`, or a failure's message, code and data. */
-export type McpHttpReply =
-  | { readonly success: true; readonly data: unknown }
-  | {
-      readonly success: false;
-      readonly error: string;
-      readonly code: ErrorCode;
-      readonly data?: unknown;
-    };
-
 interface Settings {
   readonly registry: McpRegistry;
   readonly prefix: string;
   readonly maxBodyBytes: number;
   readonly logger: Logger;
   readonly gate: RequestGate;
+  readonly serverInfo: { readonly name: string; readonly version: string };
 }
 
-/** What an `invoke` body names: any tool by name, or a method's tool by service and method. */
-type Target =
-  | { readonly kind: "tool"; readonly name: string; readonly args: unknown }
-  | {
-      readonly kind: "method";
-      readonly service: string;
-      readonly method: string;
-      readonly input: unknown;
-    };
+/** The endpoint at `{path}` itself, or one of 4.1's routes below it. */
+type Route = "endpoint" | "tools" | "invoke";
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const CATEGORY = "quickdraw.mcp";
-const NOT_JSON = "Send the call as a JSON body with Content-Type: application/json";
-const NO_TARGET =
-  "Send { name, arguments } to call a tool, or { service, method, payload } to call a method's tool";
+/** The methods of the endpoint: POST, and GET and DELETE, which it answers 405. */
+const ENDPOINT_METHODS: ReadonlySet<string> = new Set(["POST", "GET", "DELETE"]);
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function failure(error: QuickdrawError): McpCallResult {
-  return { ok: false, error };
-}
-
-function replyOf(result: McpCallResult): [number, McpHttpReply] {
-  if (result.ok) {
-    return [200, { success: true, data: result.data }];
-  }
-  const { code, message, data } = toWire(result.error);
-  const reply = { success: false as const, error: message, code };
-  return [httpStatus(code), data === undefined ? reply : { ...reply, data }];
-}
-
-/** Writes a JSON body, unless the response already ended; returns its size in bytes. */
-function send(res: ServerResponse, status: number, body: string): number | undefined {
-  if (res.headersSent || res.writableEnded || res.destroyed) {
-    return undefined;
-  }
-  const bytes = Buffer.byteLength(body);
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.setHeader("content-length", bytes);
-  // As on `/qd`: a caller's data is never cached, nor read as anything but JSON (TRANSPORT-3).
-  res.setHeader("cache-control", "no-store");
-  res.setHeader("x-content-type-options", "nosniff");
-  res.end(body);
-  return bytes;
-}
-
-function sendResult(
-  settings: Settings,
-  res: ServerResponse,
-  result: McpCallResult,
-): number | undefined {
-  const [status, reply] = replyOf(result);
-  let body: string;
-  try {
-    body = JSON.stringify(reply);
-  } catch (error) {
-    settings.logger.error(
-      "An MCP call's reply could not be encoded; it was answered with INTERNAL",
-      {
-        category: CATEGORY,
-        error: describeError(error),
-      },
-    );
-    const [internal, fallback] = replyOf(failure(new QuickdrawError("INTERNAL", INTERNAL_MESSAGE)));
-    return send(res, internal, JSON.stringify(fallback));
-  }
-  return send(res, status, body);
-}
-
-function routeOf(req: IncomingMessage, prefix: string): "tools" | "invoke" | undefined {
+function routeOf(req: IncomingMessage, prefix: string): Route | undefined {
   const path = (req.url ?? "").split("?", 1)[0] ?? "";
+  // The path itself exactly, so that `{path}/tools` and `{path}/invoke` stay 4.1's.
+  if (path === (prefix === "" ? "/" : prefix)) {
+    return ENDPOINT_METHODS.has(req.method ?? "") ? "endpoint" : undefined;
+  }
   if (req.method === "GET" && path === `${prefix}/tools`) {
     return "tools";
   }
   return req.method === "POST" && path === `${prefix}/invoke` ? "invoke" : undefined;
 }
 
-function targetOf(body: unknown): Target | undefined {
-  if (!isRecord(body)) {
-    return undefined;
-  }
-  if (typeof body.name === "string") {
-    return { kind: "tool", name: body.name, args: body.arguments };
-  }
-  if (typeof body.service === "string" && typeof body.method === "string") {
-    return { kind: "method", service: body.service, method: body.method, input: body.payload };
-  }
-  return undefined;
-}
-
-async function invoke(settings: Settings, req: HttpRequest, res: ServerResponse): Promise<void> {
-  const controller = new AbortController();
-  // `req` closes once its body was read; `res` closes when the client leaves.
-  res.once("close", () => {
-    if (!res.writableFinished) {
-      controller.abort();
-    }
-  });
-  if (!isJsonRequest(req)) {
-    sendResult(settings, res, failure(unreadable(NOT_JSON)));
-    return;
-  }
-  let body: unknown;
-  try {
-    body = await readJsonInput(req, settings.maxBodyBytes);
-  } catch (error) {
-    const reason =
-      error instanceof QuickdrawError ? error : unreadable("The request body could not be read");
-    sendResult(settings, res, failure(reason));
-    return;
-  }
-  const target = targetOf(body);
-  if (target === undefined) {
-    sendResult(settings, res, failure(unreadable(NO_TARGET)));
-    return;
-  }
-  const options: McpCallOptions = {
-    request: requestOf(req),
-    signal: controller.signal,
-    respond: (result) => sendResult(settings, res, result),
-  };
-  await (target.kind === "tool"
-    ? settings.registry.call(target.name, target.args, options)
-    : settings.registry.callMethod(target.service, target.method, target.input, options));
-}
-
-/** `"/mcp/"` and `"mcp"` become `"/mcp"`; `"/"` becomes `""`, serving `/tools` and `/invoke`. */
+/** `"/mcp/"` and `"mcp"` become `"/mcp"`; `"/"` becomes `""`, serving `/`, `/tools` and `/invoke`. */
 function normalizePath(path: string): string {
   const trimmed = path.replace(/^\/+|\/+$/g, "");
   return trimmed === "" ? "" : `/${trimmed}`;
@@ -235,26 +115,36 @@ function resolveSettings(options: McpHttpRouterOptions): Settings {
       "createMcpHttpRouter: maxBodyBytes must be a whole number of bytes, 1 or more",
     );
   }
+  const name: unknown = options.name ?? "quickdraw";
+  const version: unknown = options.version ?? QUICKDRAW_VERSION;
+  if (typeof name !== "string" || typeof version !== "string") {
+    throw new TypeError("createMcpHttpRouter: name and version must be strings, for serverInfo");
+  }
   return {
     registry: options.registry,
     prefix: normalizePath(options.path ?? "/mcp"),
     maxBodyBytes,
     logger: options.logger ?? consoleLogger,
     gate: requestGate(options.allowedOrigins, options.allowedHosts),
+    serverInfo: Object.freeze({ name, version }),
   };
 }
 
 /**
- * Serves `registry`'s tools over HTTP: `GET /mcp/tools` lists them (the
- * same list for every caller: it is not filtered by the principal), and
+ * Serves `registry`'s tools over HTTP. `POST /mcp` is MCP's Streamable HTTP
+ * transport, stateless and answering with JSON (protocol versions
+ * 2025-11-25, 2025-06-18 and 2025-03-26; GET and DELETE are answered 405),
+ * which MCP clients connect to; `GET /mcp/tools` lists the tools and
  * `POST /mcp/invoke` calls one with `{ name, arguments }`, or a method's
- * tool with 4.1's `{ service, method, payload }`, as the bearer token's
- * principal. Mount it with `app.use(router)` on Express 4 or 5, or pass it to
- * `http.createServer`. A request it does not serve goes to `next`, or gets a
- * 404 when there is no `next`.
+ * tool with 4.1's `{ service, method, payload }`. Every call runs as the
+ * bearer token's principal, and the tool list is the same for every caller
+ * (it is not filtered by the principal). Mount it with `app.use(router)` on
+ * Express 4 or 5, or pass it to `http.createServer`. A request it does not
+ * serve goes to `next`, or gets a 404 when there is no `next`.
  *
  * @example
- * app.use(createMcpHttpRouter({ registry }));
+ * // claude mcp add --transport http my-app https://host/mcp --header "Authorization: Bearer <token>"
+ * app.use(createMcpHttpRouter({ registry, name: "my-app", version: "1.0.0" }));
  */
 export function createMcpHttpRouter(options: McpHttpRouterOptions): HttpRouter {
   const settings = resolveSettings(options);
@@ -275,11 +165,19 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): HttpRouter {
         origin: req.headers.origin,
         host: req.headers.host,
       });
-      sendResult(settings, res, failure(new QuickdrawError("FORBIDDEN", refusal)));
+      if (route === "endpoint") {
+        refuse(res, 403, refusal);
+      } else {
+        sendResult(settings, res, failure(new QuickdrawError("FORBIDDEN", refusal)));
+      }
+      return;
+    }
+    if (route === "endpoint") {
+      serveEndpoint(settings, req, res);
       return;
     }
     if (route === "tools") {
-      send(res, 200, JSON.stringify({ tools: settings.registry.tools }));
+      listTools(settings, res);
       return;
     }
     invoke(settings, req, res).catch((error: unknown) => {
