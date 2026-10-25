@@ -8,11 +8,13 @@
 //
 // React-free, and TanStack-free.
 
+import type { CollectionDef } from "../../contract/collections";
 import type { AnyContract } from "../../contract/defineContract";
 import type { CollectionName, IndexRowOf, ItemOf, ScopeOf, ViewName } from "../../contract/infer";
 import { awaitingHelloOf, userOf } from "../cacheSession";
 import { collectionKey } from "../keys";
-import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
+import type { CollectionController } from "./collectionController";
+import type { CollectionEntry } from "./collectionLoads";
 import { holdingOf, type CollectionHolding, type CollectionSnapshot } from "./holding";
 import { liveCacheOf, type LiveStore } from "./liveStore";
 import { showCollection, viewPredicate, type CollectionView } from "./views";
@@ -35,6 +37,10 @@ export interface HoldCollectionTarget<C extends AnyContract, K extends Collectio
   readonly limit?: number;
 }
 
+type Snapshot = CollectionSnapshot<unknown, unknown>;
+
+type Actions = Pick<CollectionHolding<unknown, unknown>, "loadMore" | "loadItems" | "refresh">;
+
 const NOTHING: CollectionView<never> = Object.freeze({
   items: Object.freeze([]),
   index: undefined,
@@ -44,7 +50,7 @@ const NOTHING: CollectionView<never> = Object.freeze({
 function snapshotOf(
   entry: CollectionEntry | undefined,
   view: CollectionView<{ readonly id: string }>,
-): CollectionSnapshot<unknown, unknown> {
+): Snapshot {
   const state = entry?.state ?? null;
   const error = entry?.error ?? null;
   return Object.freeze({
@@ -61,6 +67,68 @@ function snapshotOf(
   });
 }
 
+/** What `holdCollection` shows of the scope `key` names: a new snapshot only when the entry or the viewer changed. */
+function readerOf(
+  store: LiveStore,
+  key: ReturnType<typeof collectionKey>,
+  def: CollectionDef,
+  view: string | undefined,
+): () => Snapshot {
+  const cache = liveCacheOf(store);
+  const { connection } = store;
+  const predicate = viewPredicate(def, view);
+  let last:
+    | {
+        readonly entry: CollectionEntry | undefined;
+        readonly userId: string | null;
+        readonly snapshot: Snapshot;
+      }
+    | undefined;
+  return () => {
+    // Awaiting new credentials' hello, it shows nothing of what is cached.
+    const entry = awaitingHelloOf(connection, cache)
+      ? undefined
+      : (cache.get(key) as CollectionEntry | undefined);
+    const userId = predicate === undefined ? null : userOf(connection.getState().hello);
+    if (last !== undefined && last.entry === entry && last.userId === userId) {
+      return last.snapshot;
+    }
+    const state = entry?.state ?? null;
+    const shown =
+      state === null
+        ? NOTHING
+        : showCollection(state, {
+            view: predicate,
+            who: { userId: userId ?? "" },
+            overlay: (row) => row,
+          });
+    const snapshot = snapshotOf(entry, shown);
+    last = { entry, userId, snapshot };
+    return snapshot;
+  };
+}
+
+/** `controller`'s actions, which do nothing once the holding is released, as a hook's do once unmounted. */
+function actionsOf(controller: CollectionController, released: () => boolean): Actions {
+  return {
+    loadMore: async (): Promise<void> => {
+      if (!released()) {
+        await controller.loadMore();
+      }
+    },
+    loadItems: async (ids: readonly string[]): Promise<void> => {
+      if (!released()) {
+        await controller.loadItems(ids);
+      }
+    },
+    refresh: async (): Promise<void> => {
+      if (!released()) {
+        await controller.refresh();
+      }
+    },
+  };
+}
+
 /**
  * Holds scope `target.scope` of `target.collection` in `store`, and calls
  * `listener` with what it shows as that changes. Throws a `TypeError` for a
@@ -68,7 +136,7 @@ function snapshotOf(
  * non-empty string.
  *
  * @example
- * const cards = holdCollection(live, { contract: task, collection: "byProject", scope: projectId }, (scope) => {
+ * const cards = holdCollection(live, { contract: task, collection: "board", scope: projectId }, (scope) => {
  *   if (scope.items.some((card) => card.status === "open")) cards.release();
  * });
  */
@@ -88,80 +156,27 @@ export function holdCollection<C extends AnyContract, K extends CollectionName<C
   if (typeof scope !== "string" || scope === "") {
     throw new TypeError("holdCollection: scope must be a non-empty string");
   }
-  const cache = liveCacheOf(store);
-  const { connection } = store;
   const key = collectionKey(contract.name, collection, scope);
-  const predicate = viewPredicate(def, target.view);
-  let last:
-    | {
-        readonly entry: CollectionEntry | undefined;
-        readonly userId: string | null;
-        readonly snapshot: CollectionSnapshot<unknown, unknown>;
-      }
-    | undefined;
-  const read = (): CollectionSnapshot<unknown, unknown> => {
-    // Awaiting new credentials' hello, it shows nothing of what is cached.
-    const entry = awaitingHelloOf(connection, cache)
-      ? undefined
-      : (cache.get(key) as CollectionEntry | undefined);
-    const userId = predicate === undefined ? null : userOf(connection.getState().hello);
-    if (last !== undefined && last.entry === entry && last.userId === userId) {
-      return last.snapshot;
-    }
-    const state = entry?.state ?? null;
-    const view =
-      state === null
-        ? NOTHING
-        : showCollection(state, {
-            view: predicate,
-            who: { userId: userId ?? "" },
-            overlay: (row) => row,
-          });
-    const snapshot = snapshotOf(entry, view);
-    last = { entry, userId, snapshot };
-    return snapshot;
-  };
-  const live: CollectionTarget = { service: contract.name, collection, def };
-  const holding = store.collections.subscribe(live, scope, {
+  const holding = store.collections.subscribe({ service: contract.name, collection, def }, scope, {
     limit: target.limit,
     loadAll: target.load === "all",
   });
   let released = false;
-  const base = holdingOf(
-    read,
-    (changed) => {
-      const stopEntry = cache.listen(key, changed);
-      const stopHellos = connection.subscribe(changed);
-      return () => {
-        stopEntry();
-        stopHellos();
-      };
+  const held = holdingOf(
+    {
+      connection: store.connection,
+      read: readerOf(store, key, def, target.view),
+      listen: (changed) => liveCacheOf(store).listen(key, changed),
+      letGo() {
+        released = true;
+        holding.release();
+      },
     },
-    () => {
-      released = true;
-      holding.release();
-    },
-    listener as (snapshot: CollectionSnapshot<unknown, unknown>) => void,
+    listener as (snapshot: Snapshot) => void,
   );
-  const { controller } = holding;
   return Object.freeze({
-    current: base.current as () => CollectionSnapshot<ItemOf<C, K>, IndexRowOf<C, K>>,
-    release: base.release,
-    // Released, they do nothing, as a hook's do once unmounted.
-    loadMore: async (): Promise<void> => {
-      if (!released) {
-        await controller.loadMore();
-      }
-    },
-    loadItems: async (ids: readonly string[]): Promise<void> => {
-      if (!released) {
-        await controller.loadItems(ids);
-      }
-    },
-    refresh: async (): Promise<void> => {
-      if (!released) {
-        await controller.refresh();
-      }
-    },
-  });
+    current: held.current,
+    release: held.release,
+    ...actionsOf(holding.controller, () => released),
+  }) as CollectionHolding<ItemOf<C, K>, IndexRowOf<C, K>>;
 }

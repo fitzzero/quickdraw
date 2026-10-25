@@ -19,6 +19,7 @@
 // React-free, and TanStack-free.
 
 import type { QuickdrawError } from "../../protocol/errors";
+import type { QuickdrawConnection } from "../connection";
 import { notifyEach } from "../watch";
 
 /** A row, scope or feed a script holds (`holdCollection`, `holdEntity`, `holdStream`). */
@@ -96,17 +97,27 @@ export interface StreamSnapshot<Item> {
   readonly error: QuickdrawError | null;
 }
 
+/** Where a holding's snapshots come from, and how it ends the store's hold. */
+export interface HoldingSource<Snapshot> {
+  /** The connection: each change of its state may change what the holding shows (a hello). */
+  readonly connection: QuickdrawConnection;
+  /** What the holding shows now: the same object while nothing it shows changed. */
+  read(): Snapshot;
+  /** Calls `changed` after each change of what `read` reads; returns the unsubscribe function. */
+  listen(changed: () => void): () => void;
+  /** Ends the store's hold of the row, scope or feed. */
+  letGo(): void;
+}
+
 /**
- * A holding whose snapshot `read` gives, told by `listen` of each change
- * that may change it; `letGo` ends the store's hold of it. `listener` hears
- * each new snapshot, at most once a microtask, the first after this returns.
+ * A holding of what `source` reads. `listener` hears each new snapshot, at
+ * most once a microtask, the first after this returns.
  */
 export function holdingOf<Snapshot>(
-  read: () => Snapshot,
-  listen: (changed: () => void) => () => void,
-  letGo: () => void,
+  source: HoldingSource<Snapshot>,
   listener: (snapshot: Snapshot) => void,
 ): Holding<Snapshot> {
+  const { read } = source;
   let released = false;
   let queued = false;
   let told: { readonly snapshot: Snapshot } | undefined;
@@ -129,7 +140,8 @@ export function holdingOf<Snapshot>(
       queueMicrotask(tell);
     }
   };
-  const stop = listen(changed);
+  const stopSource = source.listen(changed);
+  const stopConnection = source.connection.subscribe(changed);
   // The first call, once the caller holds the holding.
   changed();
   // What it showed at its release: the store forgets the row, scope or feed after.
@@ -140,8 +152,9 @@ export function holdingOf<Snapshot>(
       if (!released) {
         final = { snapshot: read() };
         released = true;
-        stop();
-        letGo();
+        stopSource();
+        stopConnection();
+        source.letGo();
       }
     },
   });

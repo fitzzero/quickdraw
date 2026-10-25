@@ -79,16 +79,7 @@ export function holdEntity<C extends EntityContract>(
   };
   const release = store.entities.subscribe(contract.name, [id]);
   return holdingOf(
-    read,
-    (changed) => {
-      const stopEntry = cache.listen(key, changed);
-      const stopHellos = connection.subscribe(changed);
-      return () => {
-        stopEntry();
-        stopHellos();
-      };
-    },
-    release,
+    { connection, read, listen: (changed) => cache.listen(key, changed), letGo: release },
     listener as (snapshot: EntitySnapshot<unknown>) => void,
   ) as Holding<EntitySnapshot<EntityOf<C>>>;
 }

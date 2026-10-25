@@ -39,16 +39,31 @@ const chat = defineContract("chatService", {
   },
 });
 
-const noContract = defineContract("lobbyService", {
-  streams: { news: { item: z.string(), access: "public" } },
+/** No entity, and a stream the host of each world's room serves. */
+const game = defineContract("gameService", {
+  streams: {
+    world: {
+      item: z.number(),
+      scope: "worldId",
+      access: { room: (worldId) => `world:${worldId}` },
+      serve: "host",
+    },
+  },
 });
 
 type Message = z.infer<typeof chat.entity>;
 
 const message = (id: string, v = 0, owner = "u1"): Message => ({ id, chatId: "c1", v, owner });
 
-function snapshot(items: readonly Message[], rev = 100) {
-  return { ok: true, rev, items, total: items.length, cursor: null, limit: 100 };
+function snapshot(items: readonly Message[], rev = 100, cursor: string | null = null) {
+  return {
+    ok: true,
+    rev,
+    items,
+    total: items.length + (cursor === null ? 0 : 1),
+    cursor,
+    limit: 100,
+  };
 }
 
 function frame(rev: number, deltas: readonly unknown[], collection = "byChat") {
@@ -217,8 +232,11 @@ describe("the live store's session", () => {
     const watched = holdEntity(live, { contract: chat, id: "m1" }, (shown) => {
       seen.push(shown);
     });
+    const news = holdStream(live, { contract: chat, stream: "news" }, () => undefined);
+    fake.answer("qd:stream:sub", 0, { ok: true, seed: ["first"] });
     await flush();
     expect(seen.at(-1)?.data).toEqual(message("m1"));
+    expect(news.current()).toEqual({ items: ["first"], isLoading: false, error: null });
     // New credentials (`setAuth`): the hello clears until the server answers them.
     fake.setState({ hello: null });
     expect(row.current()).toEqual({
@@ -228,6 +246,7 @@ describe("the live store's session", () => {
       error: null,
     });
     expect(scope.current()).toMatchObject({ items: [], isLoading: true, totalCount: null });
+    expect(news.current()).toEqual({ items: [], isLoading: true, error: null });
     await flush();
     expect(seen.at(-1)).toMatchObject({ data: undefined, isLoading: true });
     // Nothing was removed meanwhile.
@@ -237,6 +256,7 @@ describe("the live store's session", () => {
     fake.setState({ hello: fakeHello("u1") });
     expect(row.current().data).toEqual(message("m1"));
     expect(scope.current().items).toEqual([message("m1")]);
+    expect(news.current().items).toEqual(["first"]);
     await flush();
     expect(seen.at(-1)?.data).toEqual(message("m1"));
     // The same user: what is held is resumed with its revisions, not loaded from scratch.
@@ -319,13 +339,13 @@ describe("the holdings' listeners", () => {
     const told = seen.length;
     cards.release();
     cards.release();
+    // Its actions do nothing now, though the store holds the scope a tick longer.
+    void cards.refresh();
+    void cards.loadItems(["z"]);
+    void cards.loadMore();
     await tick(5);
     expect(seen).toHaveLength(told);
     expect(cards.current().items.map((item) => item.id)).toEqual(["a", "b"]);
-    // Its actions do nothing now.
-    await cards.loadMore();
-    await cards.refresh();
-    await cards.loadItems(["a"]);
     expect(fake.sent("qd:col:sub")).toHaveLength(1);
     expect(fake.sent("qd:col:items")).toEqual([]);
   });
@@ -353,6 +373,42 @@ describe("what the holdings show", () => {
     fake.deliver("qd:c", frame(200, [{ t: "patched", id: "b", d: { owner: "u1" } }], "board"));
     await flush();
     expect(mine.current().items.map((item) => item.id)).toEqual(["a", "b"]);
+  });
+
+  it("a scope is asked for with its limit, and with load all every page of it", async () => {
+    const limited = setup();
+    holdCollection(
+      limited.live,
+      { contract: chat, collection: "byChat", scope: "c1", limit: 2 },
+      () => undefined,
+    );
+    expect(limited.fake.sent("qd:col:sub")[0]?.frame).toMatchObject({ limit: 2 });
+    const { fake, live } = setup();
+    const all = holdCollection(
+      live,
+      { contract: chat, collection: "byChat", scope: "c1", load: "all" },
+      () => undefined,
+    );
+    fake.answer("qd:col:sub", 0, snapshot([message("a")], 100, "1"));
+    await tick();
+    expect(fake.sent("qd:col:sub")[1]?.frame).toMatchObject({ cursor: "1" });
+    fake.answer("qd:col:sub", 1, snapshot([message("b")], 100));
+    await tick();
+    expect(all.current().items.map((item) => item.id)).toEqual(["a", "b"]);
+  });
+
+  it("a host-served feed is asked of the host of its scope's room, never the server", async () => {
+    const { fake, live } = setup();
+    const world = holdStream(
+      live,
+      { contract: game, stream: "world", scope: "1" },
+      () => undefined,
+    );
+    await flush();
+    expect(fake.sent("qd:stream:sub")).toEqual([]);
+    // No host serves world:1 yet.
+    expect(world.current()).toEqual({ items: [], isLoading: true, error: null });
+    world.release();
   });
 
   it("a feed shows its seed and what is pushed after it, the latest max of it", async () => {
@@ -392,8 +448,8 @@ describe("what the holdings show", () => {
     expect(() => holdEntity(live, { contract: chat, id: "" }, nothing)).toThrow(
       new TypeError("holdEntity: id must be a non-empty string"),
     );
-    expect(() => holdEntity(live, { contract: noContract, id: "m1" } as never, nothing)).toThrow(
-      new TypeError("holdEntity: lobbyService declares no entity"),
+    expect(() => holdEntity(live, { contract: game, id: "m1" } as never, nothing)).toThrow(
+      new TypeError("holdEntity: gameService declares no entity"),
     );
     expect(() => holdStream(live, { contract: chat, stream: "ticker" } as never, nothing)).toThrow(
       new TypeError("holdStream: ticker is a scoped stream: scope must be a non-empty string"),

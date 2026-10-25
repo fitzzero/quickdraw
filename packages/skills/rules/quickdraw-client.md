@@ -273,11 +273,26 @@ loss })` lags the link's own messages both ways on its real path (`rel`
   TanStack Query installed: it makes a connection with
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
   `callData(connection, { service: "taskService", method: "get", input })`.
-  `./client` re-exports the same functions. Live rows need a TanStack
-  `QueryClient`: `liveDataOf(connection, queryClient)` from `./client`. A
-  row or scope it holds keeps its entry past `gcTime` until it is let go,
-  so let go of each one when done (call the function `entities.subscribe`
-  returns, or a scope holding's `release()`), or its entry stays cached.
+  `./client` re-exports the same functions. Its live data is a live store:
+  `const live = liveStoreOf(connection)` (before `open()`, one per
+  connection), then
+  `holdCollection(live, { contract, collection, scope }, listener)` (also
+  `view`, `load: "all"` and `limit`),
+  `holdEntity(live, { contract, id }, listener)` and
+  `holdStream(live, { contract, stream, scope }, listener)` (`scope` for a
+  scoped stream only; also `max`), typed by the contract. The listener gets
+  what the hook would return (without optimistic overlays), first once
+  `hold*` has returned (so it may call the holding's `release()`), then at
+  most once a microtask as it changes; check `error` as well as the data.
+  Call `release()` when done: the entry goes a tick after its last holding
+  ends. Never call `liveStoreOf` on a connection a `QuickdrawProvider` or
+  `liveDataOf` uses (it throws): give the script its own connection.
+- Code that keeps a TanStack `QueryClient` without hooks (a React Native
+  module) holds live rows in it: `liveDataOf(connection, queryClient)` from
+  `./client`. A row or scope it holds keeps its entry past `gcTime` until it
+  is let go, so let go of each one when done (call the function
+  `entities.subscribe` returns, or a scope holding's `release()`), or its
+  entry stays cached.
 - A client in another language (a Godot game, a native app) speaks the wire
   itself: `docs/protocol-v5.md` in the quickdraw repository is the
   specification, `examples/godot` a GDScript client written from it, and

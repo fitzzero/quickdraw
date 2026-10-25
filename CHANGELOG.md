@@ -158,8 +158,34 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   Nothing it reaches imports React or TanStack Query, in its code or in
   its types, so it needs only `socket.io-client`. `./client` re-exports
   it, the same functions, and keeps every name. The invalidation
-  coordinator, the overlay store, the cache session and live data take a
-  TanStack `QueryClient`, so they stay on `./client`.
+  coordinator, the overlay store, the cache session and the live data of a
+  `QueryClient` (`liveDataOf`) take a TanStack `QueryClient`, so they stay
+  on `./client`; a script's live data is the live store, below.
+- **Live data for scripts, without TanStack: a live store on
+  `./client/core`.** `liveStoreOf(connection)` is the connection's live
+  store: the live stores the hooks use, over an in-memory cache of their
+  own, so a Node script, a CLI or a worker holds live rows, collection
+  scopes and stream feeds with neither React nor TanStack Query installed.
+  `holdCollection(live, { contract, collection, scope }, listener)` (with
+  `view`, `load` and `limit` too),
+  `holdEntity(live, { contract, id }, listener)` and
+  `holdStream(live, { contract, stream, scope, max }, listener)` hold one,
+  typed by the contract, and return `{ current(), release() }` (a scope's
+  holding adds `loadMore`, `loadItems` and `refresh`). A snapshot is what
+  `useCollection`, `useEntity` and `useStream` return, without the
+  optimistic fields. The listener hears each new snapshot at most once a
+  microtask, the first once `hold*` has returned (so it may call its
+  holding's `release()`), and none after `release()`, after which
+  `current()` keeps the last. The store follows the connection as the
+  hooks' live data does: what it holds resumes by revision after a
+  reconnect and loads from scratch for another user, the cache empties on
+  another user's hello or when the server ends the session, while new
+  credentials await their hello the holdings show nothing, and an entry
+  goes a tick after its last holding ends. A connection takes one kind of
+  live data, since two on one socket unsubscribe each other's rows and
+  scopes: `liveStoreOf` throws for a connection a `QueryClient`'s live data
+  follows (a `QuickdrawProvider`'s, `liveDataOf`'s), and `liveDataOf` for
+  one a live store follows.
 - **`createServerCaller`'s `prefetch` takes a `QueryClientLike`**: the part
   of a TanStack `QueryClient` it calls (`prefetchQuery`), which any
   `QueryClient` is, so `./utils` names TanStack Query nowhere, in its types

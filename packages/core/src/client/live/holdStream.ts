@@ -34,7 +34,10 @@ export type HoldStreamTarget<C extends AnyContract, K extends StreamName<C>> = {
   /** How many of the latest items to show. Default 500; at most 10,000. */
   readonly max?: number;
 } & (IsScopedStream<C, K> extends true
-  ? { /** The scope's feed: a non-empty string. */ readonly scope: string }
+  ? {
+      /** The scope's feed: a non-empty string. */
+      readonly scope: string;
+    }
   : { readonly scope?: undefined });
 
 /**
@@ -90,16 +93,12 @@ export function holdStream<C extends AnyContract, K extends StreamName<C>>(
   const live: StreamTarget = { service: contract.name, stream, scoped, ...host };
   const release = store.streams.hold(live, feed, max);
   return holdingOf(
-    read,
-    (changed) => {
-      const stopFeed = store.streams.listen(key, changed);
-      const stopHellos = connection.subscribe(changed);
-      return () => {
-        stopFeed();
-        stopHellos();
-      };
+    {
+      connection,
+      read,
+      listen: (changed) => store.streams.listen(key, changed),
+      letGo: release,
     },
-    release,
     listener as (snapshot: StreamSnapshot<unknown>) => void,
   ) as Holding<StreamSnapshot<StreamItemOf<C, K>>>;
 }
