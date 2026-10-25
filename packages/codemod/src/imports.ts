@@ -4,6 +4,7 @@
 
 import { dirname, relative, resolve } from "node:path";
 import { Node, SyntaxKind, type Project, type SourceFile, type StringLiteral } from "ts-morph";
+import { regionOf, regionsOf } from "./carveOuts";
 import { isUnder } from "./project";
 
 /** A relative module specifier from `from` to `to` (both file paths). */
@@ -104,13 +105,39 @@ export function ensureImport(
     existing.addNamedImport(specifier);
     return;
   }
-  // After the last import: an index into the file's statements would count its comments too, and
-  // could land inside a header comment.
-  file.addImportDeclaration({
-    moduleSpecifier: module,
-    namedImports: [specifier],
-    isTypeOnly: typeOnly,
-  });
+  const structure = { moduleSpecifier: module, namedImports: [specifier], isTypeOnly: typeOnly };
+  const index = importIndex(file);
+  if (index === undefined) {
+    file.addImportDeclaration(structure);
+  } else {
+    file.insertImportDeclaration(index, structure);
+  }
+}
+
+/**
+ * Where an import the codemod adds goes among the file's statements, its
+ * comments counted (the count of its imports is no such index, and could
+ * land inside a header comment): after its last import outside the
+ * template's carve-out regions (`carveOuts.ts`), whose lines a fork strips,
+ * or before the region of its first import when every import is in one.
+ * `undefined` for a file without imports.
+ */
+function importIndex(file: SourceFile): number | undefined {
+  const imports = file.getImportDeclarations();
+  const first = imports[0];
+  if (first === undefined) {
+    return undefined;
+  }
+  const statements = file.getStatementsWithComments();
+  const last = imports.filter((declaration) => regionOf(declaration) === undefined).at(-1);
+  if (last !== undefined) {
+    return statements.indexOf(last) + 1;
+  }
+  const at = first.getStart();
+  const start =
+    regionsOf(file.getFullText()).find((region) => region.start <= at && at <= region.end)?.start ??
+    at;
+  return statements.findIndex((statement) => statement.getStart() >= start);
 }
 
 /** Whether an identifier refers to a binding, rather than naming a property or a member. */
@@ -217,7 +244,7 @@ function openingAboveImports(file: SourceFile): string | undefined {
   if (first === undefined) {
     return undefined;
   }
-  const above = file.getFullText().slice(0, first.getStart());
+  const above = file.getFullText().slice(0, first.getStart(true));
   const opening = above.trimEnd();
   return opening !== "" && /\n[ \t]*\r?\n\s*$/u.test(above) ? opening : undefined;
 }

@@ -740,13 +740,16 @@ readonly prisma: Tracked<Db>`, a private `#db`, or a constructor's
   around rather than called, and one that only reads. The summary counts
   the writers typed.
 - **An import the codemod adds goes after the file's imports, never inside
-  a comment.** It went in at an index into the file's statements, which
-  counts comments and directives too: in a file that opens with a comment
-  block, a typed writer's `Tracked` import landed inside that comment,
-  sometimes mid-sentence, and under `"use client"` a `qd` import went in
-  before an existing import. It now follows the file's last import. The
-  import cleanup also keeps the blank line under a directive or a header
-  comment when it removes the file's first import, which took it along.
+  a comment or a carve-out.** It went in at an index into the file's
+  statements, which counts comments and directives too: in a file that
+  opens with a comment block, a typed writer's `Tracked` import landed
+  inside that comment, sometimes mid-sentence; under `"use client"` a `qd`
+  import went in before an existing import; and next to a template's
+  carve-out region (between its `:start` and `:end` markers) it could land
+  inside the region, so stripping the carve-out deleted it. It now follows
+  the file's last import outside every carve-out region. The import
+  cleanup also keeps the blank line under a directive or a header comment
+  when it removes the file's first import, which took it along.
 
 ## [5.1.3] - 2026-10-23
 

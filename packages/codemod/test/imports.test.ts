@@ -4,7 +4,8 @@
 // member name) goes, as does one nothing uses; the blank line under a
 // directive or a header comment stays when the first import goes. And an
 // import a transform adds (ensureImport) goes after the file's imports,
-// never inside a comment above them.
+// never inside a comment above them nor inside a template's carve-out
+// region, whose lines a fork strips.
 
 import { describe, expect, it } from "vitest";
 import { Project, type SourceFile } from "ts-morph";
@@ -73,6 +74,24 @@ describe("ensureImport", () => {
     ensureImport(file, "@fitzzero/quickdraw-core/prisma", "Tracked", { typeOnly: true });
     expect(file.getFullText()).toBe(
       `${HEADER}import type { PrismaClient } from "./db";\nimport type { Tracked } from "@fitzzero/quickdraw-core/prisma";\n\nexport type Db = PrismaClient;\n`,
+    );
+  });
+
+  const REGION =
+    '// ── quickdraw-game:start ──\nimport { GameLink } from "./game";\n// ── quickdraw-game:end ──\n';
+
+  it.each([
+    [
+      "holds the file's last import",
+      '"use client";\n\nimport { a } from "a";\n',
+      'import { a } from "a";\n',
+    ],
+    ["holds every import", '"use client";\n\n', ""],
+  ])("adds an import outside a carve-out region that %s", (_form, above, kept) => {
+    const file = fileOf(`${above}${REGION}\nexport const view = [GameLink, qd];\n`);
+    ensureImport(file, "../lib/quickdraw", "qd");
+    expect(file.getFullText()).toBe(
+      `"use client";\n\n${kept}import { qd } from "../lib/quickdraw";\n\n${REGION}\nexport const view = [GameLink, qd];\n`,
     );
   });
 
