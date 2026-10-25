@@ -1902,7 +1902,16 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `useCollection` and a search's held scope show nothing of another row,
   scope or user while a new id, scope or user loads. A mounted mutation
   hook shows the next user none of the last user's calls, and no call or
-  channel message is sent as the next user (above).
+  channel message is sent as the next user (above). The same hello takes
+  quickdraw's mutations (keyed under `["qd", …]`) out of TanStack's mutation
+  cache, so TanStack's `useMutationState` and `useIsMutating` find none of
+  the last user's: one that ran or failed at once, one still running at once
+  (it settles out of the cache, and its callbacks run for the user who made
+  it), and one TanStack holds paused (offline, or queued in its `scope`)
+  once it resumes and is refused, since TanStack resumes only what its cache
+  holds. Until then those hooks still see it. The same user's new
+  credentials keep them, and the app's own mutations, under keys of its
+  own, stay.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.

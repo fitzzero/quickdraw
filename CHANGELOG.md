@@ -274,6 +274,25 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   A mutation that switches the user itself (an anonymous sign-in or
   sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
   hello arrives: act on its result in `onSuccess`.
+- **TanStack's mutation cache follows the user too.** The session emptied
+  quickdraw's queries and overlays on another user's hello or a session the
+  server ended, but never TanStack's mutation cache, so `useMutationState`
+  and `useIsMutating` over quickdraw's keys (`["qd", …]`) still listed the
+  last user's mutations, their `variables`, `data` and `error`, to the next
+  user: after a switch from Ada to Ed, Ed's `useMutationState` read
+  `success:ada-note`, and a call of Ada's the switch refused read
+  `pending:ada-held` in Ed's first render, then `error:ada-held`. The same
+  hello now takes quickdraw's mutations out of that cache: a settled one at
+  once, a running one at once too (it runs on, out of the cache, settles,
+  and its callbacks run for the user who made it), and one TanStack holds
+  paused (offline, or queued behind another of its `scope`) the moment it
+  settles, since TanStack resumes only the paused mutations its cache holds:
+  until it resumes, and is refused, those hooks still see it. One taken out
+  that pauses later (offline when its retry, or its first attempt after an
+  async `onMutate`, comes) is never resumed, as after
+  `queryClient.clear()`: never sent, its callbacks not run. The same user's
+  new credentials keep their mutations, and the app's own mutations, under
+  keys of its own, stay.
 - **A mutation is sent only as the user who made it.** TanStack runs a
   mutation's function late (after an async `onMutate`, after a pause while
   offline, behind a `scope` queue) and again for every retry, and the call
