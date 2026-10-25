@@ -1,2 +1,2 @@
 /** The published version of `@fitzzero/quickdraw-core`. Kept in step with package.json. */
-export const QUICKDRAW_VERSION = "5.1.3";
+export const QUICKDRAW_VERSION = "5.1.4";
