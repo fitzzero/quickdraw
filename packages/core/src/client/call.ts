@@ -204,6 +204,11 @@ function readReply(
   return internalError("The server's reply is not a call reply");
 }
 
+/** True when a send-buffer packet carries `envelope` itself: this emit's, not another with its id. */
+function carries(data: unknown, envelope: CallEnvelope): boolean {
+  return Array.isArray(data) && data[0] === CLIENT_EVENTS.call && data[1] === envelope;
+}
+
 /** True when a send-buffer packet is the `qd:call` frame of call `id`. */
 function isQueuedCall(data: unknown, id: CallId): boolean {
   return (
@@ -302,7 +307,7 @@ function emitCall(
     }
   });
   const taken = takeBack
-    ? failBuffered(socket, TAKEN_BACK, (packet) => isQueuedCall(packet.data, envelope.id))
+    ? failBuffered(socket, TAKEN_BACK, (packet) => carries(packet.data, envelope))
     : 0;
   return taken === 0;
 }

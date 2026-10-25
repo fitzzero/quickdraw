@@ -366,7 +366,20 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   whatever else the buffer still holds `CANCELLED` ("The connection
   dropped before it was sent"): a channel message (dropped, as before the
   hello), the reads that resume live data (asked for again at the
-  connect), and anything an app emitted on the socket itself.
+  connect), and anything an app emitted on the socket itself before the
+  drop. What an app emits on the socket itself while it is down still
+  waits in that buffer for the next connect (`no-raw-socket`).
+- **`socketOptions` refuses Socket.IO's `retries`.** With
+  `socketOptions: { retries: n }`, Socket.IO kept every emit it
+  acknowledges in a queue of its own and sent it again at the next connect,
+  before the new socket's `qd:hello`, past the hold and the take-back
+  above, and after a timeout, while the server may still be running it,
+  which `call` never does. A call in flight at a drop, with a cookie naming
+  Ed at the reconnect, ran as Ada and again as Ed, and Ada's code got Ed's
+  answer. `createQuickdrawConnection` (and the provider) now throws a
+  `TypeError` for a `retries` that turns Socket.IO's queue on, and
+  `SocketClientOptions` no longer has the field; `0`, or none, is left
+  alone, as is `ackTimeout`, which only times acknowledgements out.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its

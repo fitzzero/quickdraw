@@ -1737,7 +1737,12 @@ and event, plus `useEntity` and `useEntities` for a contract with an entity
 the method's kind does not have, is a compile error.
 `<QuickdrawProvider client={qd} url auth>` owns the socket and the TanStack
 `QueryClient` (5-minute stale time by default), and works without DOM
-globals (React Native).
+globals (React Native). Its `socketOptions` pass through to Socket.IO's
+`io()`, but `retries`, which it refuses with a `TypeError`: Socket.IO would
+send an unanswered call again on the next connect, before that socket's
+hello says whom it speaks for, and after a timeout, while the server may
+still be running it. quickdraw retries only the calls that are safe to
+retry: a query hook's read, once, after `INTERNAL` (`shouldRetry`).
 
 | Member                                                                    | Gives                                                                                           |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
