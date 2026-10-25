@@ -36,6 +36,7 @@ import {
   startStartupChecks,
   trackCalls,
   watchSignals,
+  type ServerWatchdog,
   type StallWatchdogOptions,
 } from "./lifecycle";
 import { editsGrants, type AnyService } from "./service";
@@ -47,6 +48,7 @@ import {
   type ServiceGrants,
 } from "./transports/auth";
 import {
+  checkHttpTransportOptions,
   httpRouter,
   httpRouterSettings,
   type HttpRouter,
@@ -315,8 +317,12 @@ function warnOnAuth(
 }
 
 function checkOptions<P extends Principal>(options: ServerOnlyOptions<P>): void {
-  // Before any server, adapter subscription or background check exists.
+  // Before anything exists, the dispatcher included: options refused here leave nothing attached
+  // to the tracked client, and no server, adapter subscription or background check.
   checkKeyPrefix(options.cluster);
+  if (options.http !== false) {
+    checkHttpTransportOptions(options.http ?? {});
+  }
   if (options.app !== undefined && typeof options.app.use !== "function") {
     throw new TypeError("createServer: app must be an Express app");
   }
@@ -408,8 +414,11 @@ function listenForLeaves<P extends Principal>(
   realtime?.onHostLeave(hosts, run);
 }
 
-/** The HTTP transport, mounted on `app` when there is one. */
-function mountRouter<P extends Principal>(
+/**
+ * The HTTP transport, or `undefined` with `http: false`. `startServer` mounts
+ * it on `app`, when there is one, once the sockets are made.
+ */
+function routerFor<P extends Principal>(
   options: ServerOnlyOptions<P>,
   base: Omit<Parameters<typeof httpRouterSettings>[1], "cookieAsToken">,
 ): HttpRouter | undefined {
@@ -418,9 +427,7 @@ function mountRouter<P extends Principal>(
   }
   // socketAuth's authenticate takes the session cookie as auth.token; any other gets it beside.
   const cookieAsToken = socketAuthOf(options.auth?.authenticate) !== undefined;
-  const router = httpRouter(httpRouterSettings(options.http ?? {}, { ...base, cookieAsToken }));
-  options.app?.use(router);
-  return router;
+  return httpRouter(httpRouterSettings(options.http ?? {}, { ...base, cookieAsToken }));
 }
 
 /**
@@ -534,23 +541,68 @@ export function createServer<const S extends readonly AnyService[]>(
   const created = createDispatcher(
     withGrants(watchdog.options, grants, options.auth?.serviceAccessSource),
   );
+  // The dispatcher is attached to the tracked client now (and its access cache, with `cacheMs`,
+  // hears the client's writes): a start that throws from here detaches it before the error goes on.
+  try {
+    const server = startServer(options, created, {
+      logger,
+      legacyWire,
+      startWatchdog: watchdog.start,
+    });
+    refresh = server.access.refresh;
+    return server;
+  } catch (error) {
+    detachFailedStart(created);
+    throw error;
+  }
+}
+
+/**
+ * Detaches the dispatcher of a server that failed to start, as `close()`
+ * does once a server stopped: the tracked client goes back to the
+ * dispatcher attached before, and the access cache stops hearing its
+ * writes. The start's own error is the one `createServer` throws, even when
+ * this throws too (the tracker is detached even then: `detachDispatcher`).
+ */
+function detachFailedStart(created: object): void {
+  try {
+    detachDispatcher(created);
+  } catch {
+    // The start's error says what went wrong.
+  }
+}
+
+/** Serves `created`: the rest of `createServer`, which detaches it again when this throws. */
+function startServer<const S extends readonly AnyService[]>(
+  options: ServerOptions<S>,
+  created: Dispatcher<S>,
+  parts: Pick<SocketServerSettings, "logger" | "legacyWire"> & {
+    readonly startWatchdog: ServerWatchdog<unknown>["start"];
+  },
+): QuickdrawServer<S> {
+  const { logger, legacyWire } = parts;
   const calls = trackCalls(created);
   const { dispatcher } = calls;
-  // In the background: a test app awaits them (`startupChecksOf`).
-  startStartupChecks(dispatcher, options, logger);
   listenForLeaves(created as Dispatcher, { room: options.onRoomLeave, host: options.onHostLeave });
   // Both transports' `authenticate`, which warns once in development when it throws anything
   // but a QuickdrawError (`authenticate-threw`).
   const resolvePrincipal = createPrincipalResolver(options.auth, logger);
-  const router = mountRouter(options, { call: dispatcher.call, resolvePrincipal, logger });
+  const router = routerFor(options, { call: dispatcher.call, resolvePrincipal, logger });
   const httpServer = options.httpServer ?? createHttpServer(options.app ?? router ?? notFound);
+  // The last part that can fail: Socket.IO checks its options and makes its adapter before it
+  // attaches to `httpServer`, so a start that fails here leaves the app's HTTP server as it was.
   const sockets = serveSockets(options, created, httpServer, {
     dispatcher,
     logger,
     resolvePrincipal,
     legacyWire,
   });
-  refresh = (userId) => sockets.refresh(userId);
+  // What cannot be undone waits for the sockets: the router on the app, and the checks in the
+  // background (a test app awaits them: `startupChecksOf`).
+  if (router !== undefined) {
+    options.app?.use(router);
+  }
+  startStartupChecks(dispatcher, options, logger);
   // In-process callers (`dispatcher.caller`, `qd.caller`) load a principal's grants as the
   // handshake does, and again once this node applied new grants to a user.
   const load = options.auth?.loadServiceAccess;
@@ -581,8 +633,8 @@ export function createServer<const S extends readonly AnyService[]>(
   if (options.handleSignals === true) {
     onClose(watchSignals(close, logger));
   }
-  if (watchdog.start !== undefined) {
-    onClose(watchdog.start(logger).stop);
+  if (parts.startWatchdog !== undefined) {
+    onClose(parts.startWatchdog(logger).stop);
   }
   return Object.freeze({
     io: sockets.io as QuickdrawIo<PrincipalOfServices<S>>,

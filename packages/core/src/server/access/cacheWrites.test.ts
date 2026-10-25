@@ -7,14 +7,21 @@
 // writes at its commit (a savepoint's when the transaction around it
 // commits), and a rolled-back write never: the cache then keeps what it
 // held, which is still right. A closed server stops hearing the client's
-// writes, a dispatcher whose construction throws never starts, and
-// `cacheMs` refuses a storage adapter that cannot report them.
+// writes, and so does one that fails to start (one whose options are
+// refused never starts hearing them); a dispatcher whose construction
+// throws never starts, and `cacheMs` refuses a storage adapter that cannot
+// report them.
 //
 //            owner   access list    members
 //   P1       ada     di: Read       bo: Moderate, cy: Read
 //   P2       ed      -              -
 //   T1 in P1, T2 in P2
 
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { PrismaClient } from "../../../test/prisma/setup";
@@ -389,10 +396,15 @@ describe("the flush", () => {
 });
 
 describe("the write listener", () => {
-  /** The board's storage adapter, recording what `onWrite` registers and each write it delivers. */
+  /**
+   * The board's storage adapter, recording what `onWrite` registers and each write it delivers,
+   * the detach of each dispatcher attached to the tracked client, and the startup check's probes.
+   */
   function spiedStorage() {
     const heard: WriteRecord[] = [];
     const stops: ReturnType<typeof vi.fn<() => void>>[] = [];
+    const detaches: ReturnType<typeof vi.fn<() => void>>[] = [];
+    const trackable = vi.fn(h.storage.trackable);
     const storage: StorageAdapter = {
       ...h.storage,
       onWrite: (listener) => {
@@ -405,8 +417,27 @@ describe("the write listener", () => {
         stops.push(stop);
         return stop;
       },
+      unitOfWork: {
+        ...h.storage.unitOfWork,
+        attach(sink, logger, warnings) {
+          const detach = h.storage.unitOfWork.attach?.(sink, logger, warnings);
+          const spy = vi.fn(() => {
+            if (typeof detach === "function") {
+              detach();
+            }
+          });
+          detaches.push(spy);
+          return spy;
+        },
+      },
+      trackable,
     };
-    return { storage, heard, stops };
+    return { storage, heard, stops, detaches, trackable };
+  }
+
+  /** A Socket.IO adapter that cannot be made, as a misconfigured cluster adapter fails. */
+  function brokenAdapter(): never {
+    throw new Error("adapter broke");
   }
 
   it("is removed when the server closes, and never added without cacheMs", async () => {
@@ -438,6 +469,114 @@ describe("the write listener", () => {
     // The tracked client serves other dispatchers on: their writes no longer reach this one.
     await h.inUnit(() => h.db.project.update({ where: { id: board.p1 }, data: { name: "Again" } }));
     expect(spied.heard).toHaveLength(1);
+  });
+
+  describe("of a createServer that fails to start", () => {
+    it.each([
+      [{ maxBodyBytes: 0 }, "http.maxBodyBytes must be a whole number of bytes, 1 or more"],
+      [{ rateLimit: 5 as never }, "http.rateLimit must be an Express middleware"],
+    ])("is never added when it refuses http %j, nor the dispatcher attached", (http, refusal) => {
+      const spied = spiedStorage();
+      expect(() =>
+        qd.createServer({
+          services: [projectService],
+          db: h.db,
+          storage: spied.storage,
+          access: { cacheMs: 60_000 },
+          http,
+        }),
+      ).toThrow(refusal);
+      expect(spied.stops).toHaveLength(0);
+      expect(spied.detaches).toHaveLength(0);
+    });
+
+    it("is removed with the dispatcher when it fails once that is made, before anything that cannot be undone", () => {
+      const spied = spiedStorage();
+      const app = Object.assign(
+        (_req: IncomingMessage, res: ServerResponse) => {
+          res.end();
+        },
+        { use: vi.fn() },
+      );
+      const httpServer = createHttpServer(app);
+      expect(() =>
+        qd.createServer({
+          services: [projectService],
+          db: h.db,
+          storage: spied.storage,
+          access: { cacheMs: 60_000 },
+          app,
+          httpServer,
+          socket: { adapter: brokenAdapter },
+        }),
+      ).toThrow("adapter broke");
+      // The dispatcher was attached, with the listener, and detached again...
+      expect(spied.stops).toHaveLength(1);
+      expect(spied.stops[0]).toHaveBeenCalledOnce();
+      expect(spied.detaches).toHaveLength(1);
+      expect(spied.detaches[0]).toHaveBeenCalledOnce();
+      // ...and the app has no router of it, its HTTP server no Socket.IO, and no check started.
+      expect(app.use).not.toHaveBeenCalled();
+      expect(httpServer.listeners("request")).toEqual([app]);
+      expect(httpServer.listenerCount("upgrade")).toBe(0);
+      expect(spied.trackable).not.toHaveBeenCalled();
+    });
+
+    it("is not left beside the one a valid createServer adds on the same tracked client", async () => {
+      const spied = spiedStorage();
+      const options = {
+        services: [projectService],
+        db: h.db,
+        storage: spied.storage,
+        access: { cacheMs: 60_000 },
+      };
+      expect(() => qd.createServer({ ...options, http: { maxBodyBytes: 0 } })).toThrow(
+        "http.maxBodyBytes",
+      );
+      expect(() => qd.createServer({ ...options, socket: { adapter: brokenAdapter } })).toThrow(
+        "adapter broke",
+      );
+      const app = await createTestApp(options);
+      try {
+        expect(spied.trackable).toHaveBeenCalled();
+        await app.server.dispatcher.run(() =>
+          h.db.project.update({ where: { id: board.p1 }, data: { name: "Renamed" } }),
+        );
+        expect(spied.heard).toHaveLength(1);
+      } finally {
+        await app.close();
+      }
+      // Each dispatcher attached to the tracked client, the failed one's and the server's, was
+      // detached once, with its listener.
+      expect(spied.detaches).toHaveLength(2);
+      for (const detach of [...spied.stops, ...spied.detaches]) {
+        expect(detach).toHaveBeenCalledOnce();
+      }
+      await h.inUnit(() =>
+        h.db.project.update({ where: { id: board.p1 }, data: { name: "Again" } }),
+      );
+      expect(spied.heard).toHaveLength(1);
+    });
+
+    it("leaves it its own error when removing the listener throws too, and the dispatcher detached", () => {
+      const spied = spiedStorage();
+      expect(() =>
+        qd.createServer({
+          services: [projectService],
+          db: h.db,
+          storage: {
+            ...spied.storage,
+            onWrite: () => () => {
+              throw new Error("unsubscribe broke");
+            },
+          },
+          access: { cacheMs: 60_000 },
+          socket: { adapter: brokenAdapter },
+        }),
+      ).toThrow("adapter broke");
+      expect(spied.detaches).toHaveLength(1);
+      expect(spied.detaches[0]).toHaveBeenCalledOnce();
+    });
   });
 
   it("is never added by a dispatcher whose construction throws, so none is left behind", () => {
