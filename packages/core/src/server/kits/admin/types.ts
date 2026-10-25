@@ -304,7 +304,10 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * a large cascade written in `prepare`, such as a user's delete clearing
    * their rows in every service. Each is a positive number of milliseconds
    * a timer honors; without a hook the kit opens no transaction, so the
-   * option is refused there.
+   * option is refused there. The call's own time limit still applies:
+   * raise the method's `timeoutMs` (on its kit entry) or
+   * `limits.callTimeoutMs` above the transaction's, or the caller gets
+   * `TIMEOUT` for a write that commits.
    *
    * @example
    * transaction: { timeoutMs: 30_000 },

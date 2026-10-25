@@ -385,7 +385,10 @@ What an app on 5.1.3 checks, each with the entry below that says more:
   runs past `timeoutMs` is undone and fails `INTERNAL`. Each must be a
   positive number of milliseconds a timer honors (at most 2147483647), and
   `transaction` without a hook, which opens no transaction, is a
-  `TypeError` from `admin.handlers`. `AdminTransactionOptions` is on
+  `TypeError` from `admin.handlers`. The call's own time limit still
+  applies: raise the method's `timeoutMs` (on its kit entry) or
+  `limits.callTimeoutMs` above the transaction's, or the caller gets
+  `TIMEOUT` for a write that commits. `AdminTransactionOptions` is on
   `./server`.
 - **The admin kit's `onWrite` gets the development checks.** Its
   statements ran unchecked, as the kit's own do, so a loop of writes in it
