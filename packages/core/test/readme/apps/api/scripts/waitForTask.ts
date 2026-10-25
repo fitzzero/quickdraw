@@ -20,23 +20,38 @@ const connection = createQuickdrawConnection({
 // made before open(), so it follows the connection from its first hello
 const live = liveStoreOf(connection);
 connection.open();
-const taskId = await new Promise<string>((resolve, reject) => {
-  const board = holdCollection(
-    live,
-    { contract: taskContract, collection: "board", scope: projectId, load: "all" },
-    // called once holdCollection has returned, then as the board changes
-    (scope) => {
-      const open = scope.items.find((card) => card.status === "open");
-      if (scope.error !== null) {
-        board.release();
-        reject(scope.error);
-      } else if (open !== undefined) {
-        board.release();
-        resolve(open.id);
+try {
+  const taskId = await new Promise<string>((resolve, reject) => {
+    const done = (): void => {
+      board.release();
+      stop();
+    };
+    const board = holdCollection(
+      live,
+      { contract: taskContract, collection: "board", scope: projectId, load: "all" },
+      // called once holdCollection has returned, then as the board changes
+      (scope) => {
+        const open = scope.items.find((card) => card.status === "open");
+        if (scope.error !== null) {
+          done();
+          reject(scope.error);
+        } else if (open !== undefined) {
+          done();
+          resolve(open.id);
+        }
+      },
+    );
+    // refused credentials send no subscribe: the board alone would wait forever
+    const stop = connection.subscribe(() => {
+      const { status, refusal } = connection.getState();
+      if (status === "refused") {
+        done();
+        reject(new Error(`the server refused the connection: ${refusal?.code ?? "REFUSED"}`));
       }
-    },
-  );
-});
-process.stdout.write(`${taskId}\n`);
-connection.close();
+    });
+  });
+  process.stdout.write(`${taskId}\n`);
+} finally {
+  connection.close();
+}
 // #endregion

@@ -178,7 +178,9 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   holding's `release()`), and none after `release()`, after which
   `current()` keeps the last. The store follows the connection as the
   hooks' live data does: what it holds resumes by revision after a
-  reconnect and loads from scratch for another user, the cache empties on
+  reconnect (a scope no other socket holds is read again, since the server
+  buffers a scope's deltas only while some socket subscribes to it) and
+  loads from scratch for another user, the cache empties on
   another user's hello or when the server ends the session, while new
   credentials await their hello the holdings show nothing, and an entry
   goes a tick after its last holding ends. A connection takes one kind of

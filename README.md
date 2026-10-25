@@ -2117,8 +2117,13 @@ changes; `current()` reads it at any time, and `release()` lets go of it.
 The store follows the connection as the hooks' live data does: what it
 holds resumes from its revisions after a reconnect, loads again from
 scratch when another user signs in, and empties when the server ends the
-session. An entry stays while something holds it, and goes a tick after its
-last holding is released. A connection whose live data a `QueryClient`
+session. A scope that no other socket holds is read again after a
+reconnect, though: the server buffers a scope's deltas only while some
+socket subscribes to it. An entry stays while something holds it, and goes
+a tick after its last holding is released. A holding does not report a
+refused connection (bad credentials send no subscribe, so `error` stays
+`null`): watch `connection.getState().status` for `"refused"`, as the
+example does. A connection whose live data a `QueryClient`
 holds (a `QuickdrawProvider`'s) takes no live store, and the other way
 round: two on one socket would unsubscribe each other's rows and scopes,
 so `liveStoreOf` (or `liveDataOf`) throws.
@@ -2144,25 +2149,40 @@ const connection = createQuickdrawConnection({
 // made before open(), so it follows the connection from its first hello
 const live = liveStoreOf(connection);
 connection.open();
-const taskId = await new Promise<string>((resolve, reject) => {
-  const board = holdCollection(
-    live,
-    { contract: taskContract, collection: "board", scope: projectId, load: "all" },
-    // called once holdCollection has returned, then as the board changes
-    (scope) => {
-      const open = scope.items.find((card) => card.status === "open");
-      if (scope.error !== null) {
-        board.release();
-        reject(scope.error);
-      } else if (open !== undefined) {
-        board.release();
-        resolve(open.id);
+try {
+  const taskId = await new Promise<string>((resolve, reject) => {
+    const done = (): void => {
+      board.release();
+      stop();
+    };
+    const board = holdCollection(
+      live,
+      { contract: taskContract, collection: "board", scope: projectId, load: "all" },
+      // called once holdCollection has returned, then as the board changes
+      (scope) => {
+        const open = scope.items.find((card) => card.status === "open");
+        if (scope.error !== null) {
+          done();
+          reject(scope.error);
+        } else if (open !== undefined) {
+          done();
+          resolve(open.id);
+        }
+      },
+    );
+    // refused credentials send no subscribe: the board alone would wait forever
+    const stop = connection.subscribe(() => {
+      const { status, refusal } = connection.getState();
+      if (status === "refused") {
+        done();
+        reject(new Error(`the server refused the connection: ${refusal?.code ?? "REFUSED"}`));
       }
-    },
-  );
-});
-process.stdout.write(`${taskId}\n`);
-connection.close();
+    });
+  });
+  process.stdout.write(`${taskId}\n`);
+} finally {
+  connection.close();
+}
 ```
 
 Code that keeps a TanStack `QueryClient` (a React Native module, a Node
