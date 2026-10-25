@@ -1,12 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig, type TestProjectInlineConfiguration } from "vitest/config";
 
-// Three projects: `.test.ts` runs under node, `.test.tsx` (React hooks and
-// components) under jsdom, and `.test-d.ts` (type tests) is type-checked, never
-// run. Tests are collected from `src/` and from `test/` (the end-to-end suite
-// in `test/e2e/`, which renders the real client hooks against a real server
-// in the test process; jsdom needs no setting for that: the server listens on
-// a Node socket, and the client connects over jsdom's WebSocket).
+// Four projects: `.test.ts` runs under node, `.test.tsx` (React hooks and
+// components) under jsdom, `.test-d.ts` (type tests) is type-checked, never
+// run, and `client-core` runs `test/client-core/` under node with React and
+// TanStack Query refused in every worker (scripts/refuse-react.mjs, loaded
+// with `--import`): a script's view of the client, through
+// `src/client/core.ts` alone, where loading either fails the test. Tests are
+// collected from `src/` and from `test/` (the end-to-end suite in
+// `test/e2e/`, which renders the real client hooks against a real server in
+// the test process; jsdom needs no setting for that: the server listens on a
+// Node socket, and the client connects over jsdom's WebSocket).
 //
 // The README's example app (test/readme) is typechecked as a whole; its
 // component tests (`test/readme/apps/web/**/*.test.tsx`, which hold the
@@ -110,8 +114,17 @@ export default defineConfig({
           name: "node",
           include: ["src/**/*.test.ts", "test/**/*.test.ts"],
           // The cluster's own tests need Valkey: they run in the cluster projects only.
-          exclude: ["test/cluster/**", ...README_APP],
+          exclude: ["test/cluster/**", "test/client-core/**", ...README_APP],
           environment: "node",
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "client-core",
+          include: ["test/client-core/**/*.test.ts"],
+          environment: "node",
+          execArgv: ["--import", new URL("./scripts/refuse-react.mjs", import.meta.url).href],
         },
       },
       {

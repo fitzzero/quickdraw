@@ -21,8 +21,9 @@
 //   through every chunk they reach, it exports none of `./client`'s layers
 //   that need them, `./client` re-exports it (the same functions), and it
 //   runs: scripts/client-core-smoke.mjs, in a process whose module hooks
-//   refuse React and TanStack Query, calls a built server through it over a
-//   v5 socket and over HTTP;
+//   refuse React and TanStack Query (scripts/refuse-react.mjs), calls a
+//   built server through it over a v5 socket and over HTTP, and holds a
+//   stream's seed through its live store (`liveStoreOf`, `holdStream`);
 // - every source module is emitted into exactly one output file (entries share
 //   chunks; with `splitting` off each entry would carry its own copy);
 // - no dependency is bundled (every source path is the package's own);
@@ -304,6 +305,10 @@ const expectations = {
       "defineHost",
       "hostOf",
       "onHostChange",
+      "liveStoreOf",
+      "holdCollection",
+      "holdEntity",
+      "holdStream",
       "createServerCaller",
       "methodKey",
       "entityKey",
