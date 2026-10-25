@@ -603,4 +603,40 @@ describe("a call or channel message sent once its socket's ping is overdue, befo
     expect(answers).toHaveLength(1);
     expect(outcomes).toEqual([changed]);
   });
+
+  it("takes back only its own call, though a raw qd:call in the buffer carries the same id", async () => {
+    const principal = { userId: "ada" };
+    const { view } = await signedIn(principal);
+    const { socket } = view.connection;
+    socket.io.reconnection(false);
+    principal.userId = "ed";
+    // The id the next call takes: the one after this.
+    const id = view.connection.nextCallId() + 1;
+    const answers: string[] = [];
+    expirePing(socket);
+    socket
+      .timeout(5000)
+      .emit("qd:call", { id, s: "noteService", m: "save", i: { text: "raw" } }, (error) => {
+        answers.push(
+          error instanceof QuickdrawError ? `${error.code}: ${error.message}` : String(error),
+        );
+      });
+    const outcomes: string[] = [];
+    noted(outcomes, qd.notes.save.call({ text: "own" }));
+    // Taken back by its envelope: the raw frame, under the same id, stays for the drop.
+    const texts = socket.sendBuffer.map(
+      (packet) => (packet.data as [string, { readonly i: { readonly text: string } }])[1].i.text,
+    );
+    expect(texts).toEqual(["raw"]);
+    expect(answers).toEqual([]);
+    await waitFor(() => {
+      expect(socket.connected).toBe(false);
+    });
+    expect(answers).toEqual(["CANCELLED: The connection dropped before it was sent"]);
+    await connectAgain(view.connection);
+    await helloFor(view.connection, "ed");
+    await settle();
+    expect(ran).toEqual([]);
+    expect(outcomes).toEqual([changed]);
+  });
 });

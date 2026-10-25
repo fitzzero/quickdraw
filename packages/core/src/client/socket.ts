@@ -17,8 +17,14 @@
 // (a timer the browser throttled, a device asleep), and engine.io closes
 // the engine a microtask after an emit notices. A call it buffered then is
 // taken back and held the same way (`call.ts`), and the socket's drop fails
-// whatever else the buffer still holds (`failBuffered`, `connection.ts`):
-// nothing emitted on one socket goes out on the next before its hello.
+// whatever else the buffer still holds (`failBuffered`, `connection.ts`).
+// So nothing quickdraw emits on one socket goes out on the next before its
+// hello: while a socket is down, quickdraw holds its calls, drops its
+// channel messages and sends nothing else. What an app emits on the socket
+// itself while it is down still waits in that buffer for the next connect,
+// which is why apps never emit on it (`no-raw-socket`). Socket.IO's own
+// `retries`, which would send an acknowledged emit again on the next
+// connect, from a queue of their own, are refused (`createSocket`).
 //
 // React-free.
 
@@ -33,8 +39,11 @@ import { notifyEach } from "./watch";
 /** The client's Socket.IO socket, typed with the v5 frames. */
 export type QuickdrawSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-/** Socket.IO client options: `io(url, options)`. */
-export type SocketClientOptions = Partial<ManagerOptions & SocketOptions>;
+/**
+ * Socket.IO client options, `io(url, options)`, but `retries`, which
+ * `createSocket` refuses.
+ */
+export type SocketClientOptions = Partial<Omit<ManagerOptions & SocketOptions, "retries">>;
 
 /** The connection options the socket is made from. */
 export interface SocketSettings {
@@ -45,14 +54,36 @@ export interface SocketSettings {
 }
 
 /**
+ * Throws when `options` turn on Socket.IO's own retries: a `retries` that is
+ * truthy, as Socket.IO reads it (`0`, or none, leaves them off). Socket.IO
+ * would keep each emit it acknowledges in a queue of its own and send it
+ * again at the next connect, before that socket's hello, as whoever its
+ * credentials then name, and after a timeout, while the server may still be
+ * running it.
+ */
+function refuseRetries(options: SocketClientOptions | undefined): void {
+  const { retries } = (options ?? {}) as { readonly retries?: unknown };
+  if (retries) {
+    throw new TypeError(
+      "createQuickdrawConnection: socketOptions.retries is not supported. Socket.IO would send an " +
+        "unanswered call again on the next connect, before that socket's qd:hello says whom it " +
+        "speaks for, and after a timeout, while the server may still be running it. Leave it out: " +
+        "quickdraw retries only the calls that are safe to retry.",
+    );
+  }
+}
+
+/**
  * Creates the socket, unconnected. `credentials` is read on every connect,
  * so new credentials take effect on the next one; the handshake adds
- * `qd: { protocol: 5, client }` to them.
+ * `qd: { protocol: 5, client }` to them. Throws a `TypeError` for
+ * `socketOptions.retries` (`refuseRetries`).
  */
 export function createSocket(
   settings: SocketSettings,
   credentials: () => Readonly<Record<string, unknown>>,
 ): QuickdrawSocket {
+  refuseRetries(settings.socketOptions);
   return io(settings.url, {
     forceNew: true,
     withCredentials: true,

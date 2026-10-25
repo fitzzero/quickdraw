@@ -1,10 +1,18 @@
 // What the connection does with Socket.IO's send buffer (RFC 0003 sections
 // 8.1 and 8.4): `failBuffered` takes the packets it picks out of it, and
 // tells their acknowledgements. Over a socket that never connects, which
-// keeps everything emitted on it in that buffer, with fake timers.
+// keeps everything emitted on it in that buffer, with fake timers. And the
+// Socket.IO option the connection refuses: `retries`, whose queue sends an
+// emit again at the next connect, before that socket's hello.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSocket, failBuffered, type BufferedPacket } from "./socket";
+import { createQuickdrawConnection } from "./connection";
+import {
+  createSocket,
+  failBuffered,
+  type BufferedPacket,
+  type SocketClientOptions,
+} from "./socket";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -49,4 +57,29 @@ describe("failBuffered", () => {
     expect(told).toHaveLength(2);
     expect(failBuffered(socket, new Error("again"))).toBe(0);
   });
+});
+
+describe("socketOptions.retries", () => {
+  // Read as Socket.IO reads it: a truthy `retries` turns its queue on.
+  it.each([1, 2, Number.POSITIVE_INFINITY, "2"])("is refused: %s", (retries) => {
+    const socketOptions = { retries } as unknown as SocketClientOptions;
+    expect(() => createQuickdrawConnection({ url: "http://127.0.0.1:9", socketOptions })).toThrow(
+      new TypeError(
+        "createQuickdrawConnection: socketOptions.retries is not supported. Socket.IO would send " +
+          "an unanswered call again on the next connect, before that socket's qd:hello says whom " +
+          "it speaks for, and after a timeout, while the server may still be running it. Leave it " +
+          "out: quickdraw retries only the calls that are safe to retry.",
+      ),
+    );
+  });
+
+  it.each([0, undefined, null, false])(
+    "is left alone when it keeps Socket.IO's queue off: %s",
+    (retries) => {
+      const socketOptions = { retries, ackTimeout: 5000 } as unknown as SocketClientOptions;
+      const connection = createQuickdrawConnection({ url: "http://127.0.0.1:9", socketOptions });
+      // Made, never opened: `ackTimeout` alone only times acknowledgements out, and resends nothing.
+      expect(connection.getState().status).toBe("idle");
+    },
+  );
 });

@@ -116,7 +116,10 @@ export interface QuickdrawConnectionOptions {
   /**
    * Socket.IO manager and socket options, passed to `io()` over the defaults
    * (`withCredentials: true`, `forceNew: true`). The connection sets `auth`
-   * and `autoConnect` itself.
+   * and `autoConnect` itself, and refuses `retries` with a `TypeError`:
+   * Socket.IO would send an unanswered call again on the next connect,
+   * before that socket's hello says whom it speaks for, and after a timeout,
+   * while the server may still be running it.
    */
   readonly socketOptions?: SocketClientOptions;
   /**

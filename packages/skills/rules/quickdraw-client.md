@@ -40,6 +40,12 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   the `QueryClient`'s defaults: `useEntity` and `useCollection` show nothing
   of another row, scope or user while a new one loads. A mounted
   `useMutation` shows none of the last user's calls.
+- `socketOptions` pass through to Socket.IO's `io()`, but `retries`, which
+  the connection refuses (`TypeError`): Socket.IO would send an unanswered
+  call again on the next connect, before that socket's hello, as whoever it
+  then speaks for, and after a timeout the server may still be running.
+  Never add retries around calls: the query hooks retry a read once after
+  `INTERNAL`, and a write is retried only by its own `retry` option.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then
