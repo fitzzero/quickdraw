@@ -39,6 +39,10 @@
 // call still settles, and its callbacks still run, for the user who made
 // it. The observer is not reset, which would drop the callbacks
 // `mutate(variables, { onSuccess })` gave a call still in flight.
+//
+// Each call's mutation carries `meta.qd`, beside the options' own `meta` and
+// whatever `mutationKey` they give, so the cache session finds it in
+// TanStack's mutation cache to take it out for another user (`session.ts`).
 
 import {
   useMutation,

@@ -290,9 +290,15 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   until it resumes, and is refused, those hooks still see it. One taken out
   that pauses later (offline when its retry, or its first attempt after an
   async `onMutate`, comes) is never resumed, as after
-  `queryClient.clear()`: never sent, its callbacks not run. The same user's
-  new credentials keep their mutations, and the app's own mutations, under
-  keys of its own, stay.
+  `queryClient.clear()`: never sent, its callbacks not run. A session the
+  server ended leaves them to its next hello, which keeps them when it names
+  the same user, whose calls may still go out as them (taking a call out at
+  the end itself would reorder its `scope`, or lose a retry waiting for its
+  delay, once that user is back), and takes them out for anyone else. The
+  same user's new credentials keep their mutations. Quickdraw's mutations
+  are a mutation hook's, marked `meta.qd` whatever `mutationKey` its options
+  give, and any keyed under `["qd", …]`; the app's own, under keys of its
+  own, stay.
 - **A mutation is sent only as the user who made it.** TanStack runs a
   mutation's function late (after an async `onMutate`, after a pause while
   offline, behind a `scope` queue) and again for every retry, and the call
