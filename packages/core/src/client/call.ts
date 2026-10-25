@@ -25,6 +25,10 @@
 //   refused fail it `CANCELLED` meanwhile (`connection.ts`), and its time
 //   running out fails it `INTERNAL`, unsent. Reads are held like writes: a
 //   `.call()` read would hand the next user's answer to the last user's code.
+//   A call made while the socket still reads connected but its engine is
+//   gone (the server's ping overdue: a throttled timer, a device asleep),
+//   which Socket.IO keeps in that buffer, is taken back out of it and held
+//   the same way, so a reconnect sends it only after its hello.
 // - A connection that drops before the answer, or is not open at all,
 //   rejects with `INTERNAL`.
 // - A `TIMEOUT`, and the `INTERNAL` of a call whose connection dropped after
@@ -57,6 +61,7 @@ import {
   type QuickdrawSocket,
 } from "./connection";
 import { refusalAt, ticketOf, type Ticket } from "./issuer";
+import { failBuffered, type CallHold } from "./socket";
 import { notifyEach } from "./watch";
 
 /**
@@ -66,6 +71,9 @@ import { notifyEach } from "./watch";
  * has been disconnected") came after the packet was sent.
  */
 const UNSENT_TIMEOUT = "operation has timed out";
+
+/** What the acknowledgement of a call taken back out of Socket.IO's send buffer is told: the call waits instead. */
+const TAKEN_BACK = new Error("Taken back out of Socket.IO's send buffer, unsent");
 
 /** One call, as {@link call} takes it. */
 export interface CallRequest {
@@ -227,22 +235,22 @@ function outcomeOfAck(
 }
 
 /**
- * Holds a call on `connection` until its socket's hello, which `send`s it
- * with the time it has left when it names the user `ticket` was made as,
- * and else `settle`s it with its refusal; the connection's own failure (new
- * credentials, `close`, a session refused) and its time running out settle
- * it unsent. Returns the function that lets it go, or `undefined` for a
- * connection that holds nothing (one made elsewhere): send it at once.
+ * Holds a call in `hold`, `connection`'s, until its socket's hello, which
+ * `send`s it with the time it has left when it names the user `ticket` was
+ * made as, and else `settle`s it with its refusal; the connection's own
+ * failure (new credentials, `close`, a session refused) and its time running
+ * out settle it unsent. Returns the function that lets it go.
  */
 function holdUntilConfirmed(
+  hold: CallHold,
   connection: QuickdrawConnection,
   ticket: Ticket,
   deadline: number,
   send: (ms: number) => void,
   settle: (outcome: QuickdrawError) => void,
-): (() => void) | undefined {
+): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const release = callHoldOf(connection)?.hold({
+  const release = hold.hold({
     confirmed(hello) {
       clearTimeout(timer);
       const refusal = refusalAt(ticket, hello, connection);
@@ -260,9 +268,6 @@ function holdUntilConfirmed(
       settle(error);
     },
   });
-  if (release === undefined) {
-    return undefined;
-  }
   timer = setTimeout(
     () => {
       release();
@@ -274,6 +279,32 @@ function holdUntilConfirmed(
     clearTimeout(timer);
     release();
   };
+}
+
+/**
+ * Emits call `envelope` on `socket` with time limit `ms`, telling `answered`
+ * its acknowledgement. Returns false when Socket.IO kept it in its send
+ * buffer though the socket reads connected (the engine under it is gone:
+ * the server's ping is overdue) and `takeBack` says to take it back out:
+ * the next connect would send it before that socket's hello. Its
+ * acknowledgement is then never told anything.
+ */
+function emitCall(
+  socket: QuickdrawSocket,
+  envelope: CallEnvelope,
+  ms: number,
+  answered: (error: Error | null, reply: unknown) => void,
+  takeBack: boolean,
+): boolean {
+  socket.timeout(ms).emit(CLIENT_EVENTS.call, envelope, (error: Error | null, reply: unknown) => {
+    if (error !== TAKEN_BACK) {
+      answered(error, reply);
+    }
+  });
+  const taken = takeBack
+    ? failBuffered(socket, TAKEN_BACK, (packet) => isQueuedCall(packet.data, envelope.id))
+    : 0;
+  return taken === 0;
 }
 
 /** Drops the call from Socket.IO's send buffer, or else asks the server to cancel it. */
@@ -345,27 +376,22 @@ export function call<Output = unknown>(
       }
       settle(cancelledError());
     }
+    const hold = callHoldOf(connection);
+    const answered = (error: Error | null, reply: unknown): void => {
+      settle(outcomeOfAck(connection, kind, timeoutMs, error, reply));
+    };
     const send = (ms: number): void => {
-      sent = true;
-      socket
-        .timeout(ms)
-        .emit(
-          CLIENT_EVENTS.call,
-          envelopeOf(id, request),
-          (error: Error | null, reply: unknown) => {
-            settle(outcomeOfAck(connection, kind, timeoutMs, error, reply));
-          },
-        );
+      sent = emitCall(socket, envelopeOf(id, request), ms, answered, hold !== undefined);
+      if (!sent && hold !== undefined) {
+        // Kept for the next connect, which would send it before that socket's hello: wait for it.
+        letGo = holdUntilConfirmed(hold, connection, ticket, deadline, send, settle);
+      }
     };
     // A socket without a hello of its own may speak for someone else (a cookie): wait for it.
-    const confirmed = (callHoldOf(connection)?.confirmed ?? true) && socket.connected;
-    const held = confirmed
-      ? undefined
-      : holdUntilConfirmed(connection, ticket, deadline, send, settle);
-    if (held === undefined) {
+    if (hold === undefined || (hold.confirmed && socket.connected)) {
       send(timeoutMs);
     } else {
-      letGo = held;
+      letGo = holdUntilConfirmed(hold, connection, ticket, deadline, send, settle);
     }
     signal?.addEventListener("abort", onAbort, { once: true });
   });

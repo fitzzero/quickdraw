@@ -23,6 +23,7 @@ import { callHoldOf, type QuickdrawConnection } from "./connection";
 import { createQuickdrawClient } from "./createClient";
 import { useJoin } from "./join";
 import { useQuickdraw } from "./provider";
+import type { QuickdrawSocket } from "./socket";
 import { outgoing } from "./__tests__/fixtures";
 
 const server = initQuickdraw<{ principal: Principal }>();
@@ -172,6 +173,17 @@ function holdHellos(socket: unknown): () => void {
       deliver(packet);
     }
   };
+}
+
+/**
+ * Leaves `socket`'s engine as a timer the browser throttled, or a device
+ * that slept, leaves it: the server's next ping overdue, the engine not yet
+ * closed. The socket still reads connected, Socket.IO buffers what is
+ * emitted on it, and engine.io closes the engine a microtask after the first
+ * emit notices.
+ */
+function expirePing(socket: QuickdrawSocket): void {
+  (socket.io.engine as unknown as { _pingTimeoutTime: number })._pingTimeoutTime = Date.now() - 1;
 }
 
 /** Connects a socket `disconnect()` dropped, without waiting for its hello. */
@@ -493,5 +505,102 @@ describe("a call made while its socket has no hello of its own", () => {
     await helloFor(view.connection, "ada");
     await settle();
     expect(ran).toEqual([]);
+  });
+});
+
+describe("a call or channel message sent once its socket's ping is overdue, before the socket drops", () => {
+  it.each([
+    ["refuses the call", "ed", [], [changed]],
+    ["sends the call", "ada", ["save:ping-overdue as ada"], ["answered for ada"]],
+  ])(
+    "keeps both from the next connect: its hello %s when it names %s, and the message is dropped",
+    async (_does, next, ranAfter, outcomesAfter) => {
+      const principal = { userId: "ada" };
+      const { view } = await signedIn(principal, <Cursor />);
+      const shown = within(view.container);
+      await shown.findByText("ada ready");
+      const { socket } = view.connection;
+      // The test connects the socket again itself, as `next`.
+      socket.io.reconnection(false);
+      principal.userId = next;
+      const outcomes: string[] = [];
+      expirePing(socket);
+      // The socket still reads connected: both pass their checks, and are emitted.
+      noted(outcomes, qd.notes.save.call({ text: "ping-overdue" }));
+      fireEvent.click(shown.getByRole("button"));
+      await waitFor(() => {
+        expect(socket.connected).toBe(false);
+      });
+      // Nothing is left for the next connect to send before its hello: the call waits for it.
+      expect(socket.sendBuffer).toEqual([]);
+      expect(callHoldOf(view.connection)?.size).toBe(1);
+      const letIn = holdHellos(socket);
+      await connectAgain(view.connection);
+      await settle(50);
+      expect(ran).toEqual([]);
+      expect(cursors).toEqual([]);
+      letIn();
+      await helloFor(view.connection, next);
+      await settle();
+      expect(ran).toEqual(ranAfter);
+      expect(outcomes).toEqual(outcomesAfter);
+      expect(cursors).toEqual([]);
+    },
+  );
+
+  it("sends a call it kept back after the same user's hello, before a call made after the drop", async () => {
+    const { view } = await signedIn({ userId: "ada" });
+    const { socket } = view.connection;
+    socket.io.reconnection(false);
+    const sent = outgoing(view.connection);
+    const outcomes: string[] = [];
+    expirePing(socket);
+    noted(outcomes, qd.notes.save.call({ text: "first" }));
+    await waitFor(() => {
+      expect(socket.connected).toBe(false);
+    });
+    noted(outcomes, qd.notes.read.call({ text: "second" }));
+    expect(callHoldOf(view.connection)?.size).toBe(2);
+    await view.reconnect();
+    await settle();
+    const calls = sent
+      .filter(([event]) => event === "qd:call")
+      .map(([, envelope]) => (envelope as { readonly i: { readonly text: string } }).i.text);
+    expect(calls).toEqual(["first", "second"]);
+    expect(outcomes).toEqual(["answered for ada", "answered for ada"]);
+  });
+
+  it("fails anything else emitted then CANCELLED at the drop, and sends none of it on the next socket", async () => {
+    const principal = { userId: "ada" };
+    const { view } = await signedIn(principal);
+    const { socket } = view.connection;
+    socket.io.reconnection(false);
+    principal.userId = "ed";
+    const answers: string[] = [];
+    expirePing(socket);
+    // A call frame of the app's own making, on the socket itself, as `no-raw-socket` warns against.
+    socket
+      .timeout(5000)
+      .emit("qd:call", { id: 9999, s: "noteService", m: "save", i: { text: "raw" } }, (error) => {
+        answers.push(
+          error instanceof QuickdrawError ? `${error.code}: ${error.message}` : String(error),
+        );
+      });
+    // A call of the client's own, taken back on its own: the frame before it stays for the drop.
+    const outcomes: string[] = [];
+    noted(outcomes, qd.notes.save.call({ text: "own" }));
+    expect(socket.sendBuffer).toHaveLength(1);
+    expect(answers).toEqual([]);
+    await waitFor(() => {
+      expect(socket.connected).toBe(false);
+    });
+    expect(socket.sendBuffer).toEqual([]);
+    expect(answers).toEqual(["CANCELLED: The connection dropped before it was sent"]);
+    await connectAgain(view.connection);
+    await helloFor(view.connection, "ed");
+    await settle();
+    expect(ran).toEqual([]);
+    expect(answers).toHaveLength(1);
+    expect(outcomes).toEqual([changed]);
   });
 });

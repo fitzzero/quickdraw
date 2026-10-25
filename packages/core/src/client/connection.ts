@@ -55,6 +55,10 @@
 //   else (`call.ts`). New credentials (`setAuth`), `close` and a session
 //   refused fail the calls held with `CANCELLED`, as Socket.IO's buffer
 //   would have sent them on the next connect, as whoever it then names.
+//   That buffer still fills for a moment while a socket reads connected
+//   after its engine's ping is overdue: a call it took is taken back and
+//   held (`call.ts`), and a drop fails anything else left in it
+//   `CANCELLED` (`failBuffered`, `socket.ts`), unsent.
 // - Subscription events (`qd:sub`, `qd:col:sub`, `qd:col:items`,
 //   `qd:watch`) go through the connection's lane (`lane.ts`), paced by the
 //   server's `limits.subscriptions`.
@@ -86,6 +90,7 @@ import { createRetry, type Retry } from "./retry";
 import {
   createCallHold,
   createSocket,
+  failBuffered,
   type CallHold,
   type HeldCall,
   type QuickdrawSocket,
@@ -702,6 +707,12 @@ function listenToSocket(wiring: Wiring): void {
     }
   });
   socket.on("disconnect", (reason: unknown) => {
+    // Socket.IO would send these on the next connect, before its hello: what its socket took
+    // after the engine's ping was overdue, the socket still reading connected (`socket.ts`).
+    failBuffered(
+      socket,
+      new QuickdrawError("CANCELLED", "The connection dropped before it was sent"),
+    );
     const status = socket.active ? "connecting" : lifecycle.stoppedStatus();
     // The server ended the session: who it was is no longer known.
     const ended = isServerDisconnect(reason);
