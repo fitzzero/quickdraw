@@ -582,6 +582,35 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `auth.loadServiceAccess` loads, at each call, as `qd.caller`'s; the
   hook's principal is still used as the hook returns it. The HTTP routes
   never read a principal from a request.
+- **`createMcpHttpRouter` serves MCP's Streamable HTTP transport.** MCP
+  clients that speak it (Claude Code's `claude mcp add --transport http`,
+  the MCP SDK's `StreamableHTTPClientTransport`) could not connect to the
+  router, which served only 4.1's `GET /mcp/tools` and `POST /mcp/invoke`,
+  so an app wrote its own `/mcp` transport over `callMethod`. `POST {path}`
+  (`/mcp` by default) now takes JSON-RPC messages and answers them in one
+  JSON body, statelessly, in protocol versions 2025-11-25, 2025-06-18 and
+  2025-03-26: `initialize` answers the client's version when it is one of
+  them, else the latest, and `initialize`, `ping`, `tools/list` and
+  `tools/call` are answered as on stdio (a failed call is a tool result
+  with `isError` carrying its code). Each call runs as the bearer token's
+  principal through the registry's `principal` hook, behind the router's
+  `allowedOrigins` and `allowedHosts`, within its body limit and in the
+  caller's lane, as `invoke`'s calls do, and a client that goes away
+  cancels its call. A request needs `Content-Type: application/json` (415
+  otherwise) and an `Accept` that allows `application/json` (406); an
+  `MCP-Protocol-Version` the endpoint does not speak is 400 (without one, a
+  request is 2025-03-26's); notifications and responses alone get 202. A
+  batch is 2025-03-26's only, of at most 16 messages and one `tools/call`,
+  so a rate limit in front of the route, which counts a POST once, counts
+  every call. No `Mcp-Session-Id` is ever sent, and one a client sends is
+  ignored. GET and DELETE at `{path}` itself, which went to the app's next
+  handler, are now answered 405 with `Allow: POST`; other methods still go
+  to it. Server-sent events, sessions, resumability and OAuth discovery are
+  not served, and `notifications/cancelled` does nothing: a client cancels
+  a call by closing its request. `createMcpHttpRouter` takes `name` and
+  `version` for `initialize`'s `serverInfo` (default `"quickdraw"` and
+  quickdraw-core's version). The stdio server shares the JSON-RPC handling
+  and still speaks 2024-11-05.
 - **The admin kit runs `prepare` before each write.**
   `admin.handlers(contract, { prepare })` calls `prepare(call, ctx, db)`
   before `adminCreate`, `adminUpdate` and `adminDelete`, once the caller's

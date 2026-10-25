@@ -1518,10 +1518,10 @@ lane. A `principal` hook that authenticates by anything but the bearer
 token (a cookie, an API key header) must refuse a request whose bearer
 token it does not verify, or a caller makes a lane per made-up token. The
 HTTP routes have no rate limit of their own: limit them per address, as
-below (`createPublicApiLimiter` answers 429 with `{ error }`, not the
-routes' `{ success: false, code }`). A method whose input cannot describe
-itself as JSON Schema stops the registry at startup, naming the method,
-unless it is excluded.
+below (`createPublicApiLimiter` answers 429 with `{ error }`, neither a
+JSON-RPC error nor the 4.1 routes' `{ success: false, code }`). A method
+whose input cannot describe itself as JSON Schema stops the registry at
+startup, naming the method, unless it is excluded.
 
 <!-- example: apps/api/src/mcp.ts#mcp -->
 
@@ -1558,10 +1558,12 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
-// address (never by the bearer token, which nothing has checked yet)
+// POST /mcp is MCP's Streamable HTTP transport, for a client such as Claude Code:
+//   claude mcp add --transport http my-app https://host/mcp --header "Authorization: Bearer $TOKEN"
+// and GET /mcp/tools, POST /mcp/invoke are 4.1's routes. None has a rate limit of its own, so limit
+// them per address (never by the bearer token, which nothing has checked yet)
 app.use("/mcp", createPublicApiLimiter({ max: 600 }));
-app.use(createMcpHttpRouter({ registry }));
+app.use(createMcpHttpRouter({ registry, name: "my-app", version: "1.0.0" }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
 ```
@@ -1573,15 +1575,36 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   (`server.close()` cancels them instead). Start its module through
   `bootstrapMcpServer(new URL("./mcp-server.js", import.meta.url))`, which
   sends console output to stderr so only the protocol reaches stdout.
-- **HTTP**: `GET /mcp/tools` and `POST /mcp/invoke`, which takes
-  `{ name, arguments }` and answers `{ success: true, data }`, or
-  `{ success: false, error, code, data? }` with the code's HTTP status. A
-  request from a web page (one with an `Origin` header) is answered 403
-  unless `createMcpHttpRouter({ allowedOrigins })` lists its origin (exact
-  origins or anchored patterns, as `socketAuth` takes them; none by
-  default); an MCP client sends no `Origin`. `allowedOrigins` adds no CORS
-  headers: a page on another origin still needs the app's CORS setup. For a
-  server on a developer's machine or a LAN,
+- **HTTP**: `POST /mcp` is MCP's Streamable HTTP transport (protocol
+  versions 2025-11-25, 2025-06-18 and 2025-03-26), which MCP clients such
+  as Claude Code connect to, in its stateless, JSON-only form: a POST's
+  JSON-RPC messages are answered in its response, one JSON body, and
+  `initialize` answers the client's version when it is one of the three,
+  else the latest. `initialize`, `ping`, `tools/list` and `tools/call` are
+  answered as on stdio, and each call runs as the bearer token's principal,
+  in its caller's lane. A request needs `Content-Type: application/json`
+  (415 otherwise) and an `Accept` that allows `application/json` (406),
+  and the `MCP-Protocol-Version` it names must be one of the three (400;
+  without one it is 2025-03-26). Notifications and responses alone are
+  answered 202. A batch is 2025-03-26's only, of at most 16 messages and
+  one `tools/call` (400 otherwise), so a rate limit in front of the route,
+  which counts a POST once, counts every call. The endpoint keeps no
+  session: it never sends `Mcp-Session-Id` (one a client sends is
+  ignored), and answers GET and DELETE 405 (`Allow: POST`). It serves no
+  event stream, resumability or OAuth discovery. A client cancels a call by
+  closing its request: `notifications/cancelled` names a request of an
+  earlier POST, which a stateless server cannot find, so it does nothing.
+  `createMcpHttpRouter({ name, version })` names the server in
+  `initialize` (default `"quickdraw"` and quickdraw-core's version).
+- 4.1's routes stay beside it: `GET /mcp/tools`, and `POST /mcp/invoke`,
+  which takes `{ name, arguments }` and answers `{ success: true, data }`,
+  or `{ success: false, error, code, data? }` with the code's HTTP status.
+- A request from a web page (one with an `Origin` header) is answered 403
+  on every route unless `createMcpHttpRouter({ allowedOrigins })` lists its
+  origin (exact origins or anchored patterns, as `socketAuth` takes them;
+  none by default); an MCP client sends no `Origin`. `allowedOrigins` adds
+  no CORS headers: a page on another origin still needs the app's CORS
+  setup. For a server on a developer's machine or a LAN,
   `allowedHosts: ["localhost", "127.0.0.1", "::1"]` also refuses a request
   for any other `Host`, which a DNS-rebinding page would send. An entry with
   a port matches that port only (a `Host` without one is for port 80 or
@@ -1640,7 +1663,7 @@ const projectAgents = createMcpRegistry({
   name: (_service, method) => (method === "create" ? "create_task" : "count_tasks"),
 });
 
-// beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
+// beside the first registry, at a path of its own: /agents, /agents/tools and /agents/invoke
 app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 ```
 
@@ -1716,8 +1739,8 @@ app.post("/assistant/:service/:method", signedIn, (req, res) => {
   `auth.loadServiceAccess` loads, at each call, as `qd.caller` gives them;
   one that carries grants (`{}` included) keeps exactly those. The `principal`
   hook's principal is used as the hook returns it.
-- It is an in-process option: `POST /mcp/invoke` never reads a principal
-  from its body.
+- It is an in-process option: neither `POST /mcp` nor `POST /mcp/invoke`
+  reads a principal from a request's body.
 
 Two more needs are met by the options above, with nothing added:
 

@@ -41,10 +41,12 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
-// address (never by the bearer token, which nothing has checked yet)
+// POST /mcp is MCP's Streamable HTTP transport, for a client such as Claude Code:
+//   claude mcp add --transport http my-app https://host/mcp --header "Authorization: Bearer $TOKEN"
+// and GET /mcp/tools, POST /mcp/invoke are 4.1's routes. None has a rate limit of its own, so limit
+// them per address (never by the bearer token, which nothing has checked yet)
 app.use("/mcp", createPublicApiLimiter({ max: 600 }));
-app.use(createMcpHttpRouter({ registry }));
+app.use(createMcpHttpRouter({ registry, name: "my-app", version: "1.0.0" }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
 // #endregion
@@ -64,7 +66,7 @@ const projectAgents = createMcpRegistry({
   name: (_service, method) => (method === "create" ? "create_task" : "count_tasks"),
 });
 
-// beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
+// beside the first registry, at a path of its own: /agents, /agents/tools and /agents/invoke
 app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 // #endregion
 
