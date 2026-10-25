@@ -4589,7 +4589,12 @@ call only to the user it was made as (and refuses one whose user changed
 before it ran), a query reads once a hello names the session's user, and
 `isKnown: false` after a known session is new credentials awaiting their
 hello: the hooks show nothing of what is cached, and the same user's hello
-after it reads every query again:
+after it reads every query again. It does not model two of the real
+client's rules: a mutation attempt that starts while new credentials await
+their hello calls its stub where the real client refuses it `CANCELLED`,
+and calls are not held until the socket's hello. Test those against
+`createTestApp` and the real client. A test sets the session, then renders
+under `mock.$Provider`:
 
 <!-- example: apps/web/src/components/TaskBoard.test.tsx#session -->
 
