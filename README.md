@@ -2079,7 +2079,11 @@ Live rows and collections take a TanStack `QueryClient`, so they are on
 `./client` only, still without React: `liveDataOf(connection, queryClient)`
 holds them for code without hooks (a React Native module, a Node client
 that keeps a `QueryClient`), and `createInvalidationCoordinator(queryClient)`
-invalidates as the hooks do.
+invalidates as the hooks do. A row or scope held that way keeps its entry
+for as long as it is held, however long past the `QueryClient`'s `gcTime`;
+once its last holder lets it go (the function `entities.subscribe` returns,
+or a scope holding's `release()`), TanStack collects the entry `gcTime`
+later, unless a hook shows it.
 
 A client in another language (a Godot game, a native app) speaks the wire
 itself: [`docs/protocol-v5.md`](docs/protocol-v5.md) is its specification,

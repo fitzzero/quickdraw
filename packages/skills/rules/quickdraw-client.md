@@ -263,7 +263,10 @@ loss })` lags the link's own messages both ways on its real path (`rel`
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
   `callData(connection, { service: "taskService", method: "get", input })`.
   `./client` re-exports the same functions. Live rows need a TanStack
-  `QueryClient`: `liveDataOf(connection, queryClient)` from `./client`.
+  `QueryClient`: `liveDataOf(connection, queryClient)` from `./client`. A
+  row or scope it holds keeps its entry past `gcTime` until it is let go,
+  so let go of each one when done (call the function `entities.subscribe`
+  returns, or a scope holding's `release()`), or its entry stays cached.
 - A client in another language (a Godot game, a native app) speaks the wire
   itself: `docs/protocol-v5.md` in the quickdraw repository is the
   specification, `examples/godot` a GDScript client written from it, and

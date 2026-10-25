@@ -209,6 +209,24 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   re-keyed `useEntity` or `useCollection` shows `isLoading` and no data
   until its answer, under a `keepPreviousData` default too. `useEntities`
   was never affected: each id has an observer of its own.
+- **A row or scope held without a hook keeps its entry past `gcTime`.**
+  The live stores wrote their entries into the `QueryClient` without
+  observing them, and TanStack collects a query `gcTime` after it is built,
+  or after its last observer leaves, unless one observes it then: five
+  minutes in a browser and in React Native (a `QueryClient` in Node
+  collects nothing unless given a `gcTime`). So code that held a row or a
+  scope through `liveDataOf(connection, queryClient)`, with no hook to show
+  it, lost the entry `gcTime` after its first load though it still held
+  it: `getQueryData` found nothing, and the next frame or idle check loaded
+  the scope again from its first page, or asked for the row again. The
+  stores now observe each row and scope they hold, from when they hold it
+  until a tick after its last holder lets it go, with the query a hook
+  observes its entry with, which never fetches: the entry stays while it is
+  held, and TanStack collects it `gcTime` after no hook shows it any more,
+  as before. Another user's hello still empties every held entry, and an
+  entry removed from the cache stays removed until the stores write it
+  again. The hooks were never affected: each observes its entry while
+  mounted. Devtools show the stores' observer on each entry they hold.
 - **`useJoin` shows `data` only to the user who joined.** What the last
   join returned stayed shown while new credentials awaited their hello, was
   carried into the next user's `joining` state, and stayed beside that

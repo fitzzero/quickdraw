@@ -158,6 +158,12 @@ function createOutcomeChecks(
   };
 }
 
+/** Starts a scope the hub holds anew: the cache keeps its entry until the close releases it, and it loads. */
+function open(host: LiveHost, controller: CollectionController): void {
+  host.cache.hold(controller.key);
+  controller.start();
+}
+
 /** Creates the live collections of `host`. */
 export function createCollectionHub(host: LiveHost): CollectionHub {
   const registry = createRegistry<CollectionController>((controller) => {
@@ -187,8 +193,7 @@ export function createCollectionHub(host: LiveHost): CollectionHub {
       const { entry: controller } = holding;
       const stopAll = options.loadAll === true ? controller.loadAll() : undefined;
       if (holding.isNew) {
-        host.cache.hold(controller.key);
-        controller.start();
+        open(host, controller);
       }
       checks.start();
       outcomes.start();
