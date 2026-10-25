@@ -4497,7 +4497,14 @@ who it acts for, set with `createMockClient(contracts, { session })` and
 `mock.$session({ userId, serviceAccess, isConnected, isKnown })` (each field
 left out keeps its starting value, and the reset after each test puts the
 starting session back), and the rooms `mock.$presence(room, userIds)` sets.
-Its views select members for the session's user:
+Its views select members for the session's user, and its cache follows the
+session by the real client's rules: a `$session` naming another user
+empties it of quickdraw's queries and mutations, a mutation hook shows a
+call only to the user it was made as (and refuses one whose user changed
+before it ran), a query reads once a hello names the session's user, and
+`isKnown: false` after a known session is new credentials awaiting their
+hello: the hooks show nothing of what is cached, and the same user's hello
+after it reads every query again:
 
 <!-- example: apps/web/src/components/TaskBoard.test.tsx#session -->
 
@@ -4516,8 +4523,9 @@ show the last story's in all of them: give each its own with the
 provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`
 (a `MockSession`, the type `$session(...)` takes too), laid over the
 mock's session field by field for that subtree alone (the
-real `useQuickdraw()` and `usePresence`, and the mock's views and admin
-grants, read it there).
+real `useQuickdraw()` and `usePresence`, and the mock's views, admin
+grants, queries and mutation hooks, read it there; the mock's one cache
+follows the mock's own session, not a provider's).
 
 ### Test databases
 

@@ -221,6 +221,16 @@ same way, even from a registry over a strict test app's dispatcher.
   and `mock.$presence(room, userIds)`. Never re-export `useQuickdraw` from
   the module you mock to fake it. `useAdminServices(mock)` asks only the
   services the session's `serviceAccess` allows.
+- The mock follows its session as the real client does, so a switch of
+  users tests what production shows: a `$session` naming another user
+  empties its quickdraw queries and mutations, a mutation hook shows a
+  call only to the user it was made as and refuses one whose user changed
+  before its attempt (`CANCELLED`, its stub never called), and a query
+  reads only once a hello names the user. `$session({ isKnown: false })`
+  after a known session stands for new credentials awaiting their hello:
+  the hooks show nothing cached, and the same user's hello reads every
+  query again. Set a stub's answer for the next user before the switch
+  (or `mockReset()` it) when a test checks what they read.
 - Storybook and other browser bundles import the mock from
   `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
   a decorator wraps every story in `qd.$Provider`, and a story's
