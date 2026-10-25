@@ -17,7 +17,10 @@
 // from any signed-in socket, so Ada's input would run as Ed. `isReady` reads
 // false meanwhile, though a drop keeps the last hello (`../call.ts` holds
 // calls the same way; a channel message is input the next one supersedes,
-// so it is dropped rather than held).
+// so it is dropped rather than held). One sent while the socket still
+// reads connected after its engine's ping is overdue waits in Socket.IO's
+// send buffer, which the next connect would send before its hello: the
+// drop that follows fails it there (`failBuffered`, `../connection.ts`).
 //
 // A host-served channel (`serve: "host"`) goes to the host of the room its
 // `requires: { room }` names instead, over this connection's way to it

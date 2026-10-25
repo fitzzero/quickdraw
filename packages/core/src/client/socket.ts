@@ -12,6 +12,14 @@
 // holds them itself (`CallHold`), and the hello lets each go, or refuses it,
 // in the order they were made (`call.ts` decides which).
 //
+// Socket.IO also buffers what is emitted while its socket still reads
+// connected but the engine under it is gone: the server's ping is overdue
+// (a timer the browser throttled, a device asleep), and engine.io closes
+// the engine a microtask after an emit notices. A call it buffered then is
+// taken back and held the same way (`call.ts`), and the socket's drop fails
+// whatever else the buffer still holds (`failBuffered`, `connection.ts`):
+// nothing emitted on one socket goes out on the next before its hello.
+//
 // React-free.
 
 import { io, type ManagerOptions, type Socket, type SocketOptions } from "socket.io-client";
@@ -62,17 +70,35 @@ export function createSocket(
 /** An acknowledgement as Socket.IO keeps it: `withError` when it takes an error first (`timeout`). */
 type Ack = ((...args: unknown[]) => void) & { readonly withError?: boolean };
 
+/** A packet in Socket.IO's send buffer. */
+export type BufferedPacket = QuickdrawSocket["sendBuffer"][number];
+
 /**
- * Fails every packet waiting in Socket.IO's send buffer with `error` and
- * empties the buffer. Socket.IO sends that buffer on the next connect,
- * whatever credentials the socket then carries, so a call made as one user
- * would run as the next. Calls are held (`CallHold`), not buffered: this is
- * for anything else an app emits on the socket itself.
+ * Takes the packets `which` picks (every one, by default) out of Socket.IO's
+ * send buffer, and fails them with `error`: an acknowledgement that takes an
+ * error first is told it, which also ends its time limit, and any other is
+ * dropped. Returns how many it took. Socket.IO sends that buffer on the next
+ * connect, before that socket's hello and whatever credentials it carries,
+ * so a call made as one user would run as the next. Calls are held
+ * (`CallHold`) or taken back (`call.ts`), not left there: this is for
+ * anything else emitted on the socket.
  */
-function failBuffered(socket: QuickdrawSocket, error: Error): void {
-  const buffered = socket.sendBuffer.splice(0);
+export function failBuffered(
+  socket: QuickdrawSocket,
+  error: Error,
+  which: (packet: BufferedPacket) => boolean = () => true,
+): number {
+  const taken: BufferedPacket[] = [];
+  const kept: BufferedPacket[] = [];
+  for (const packet of socket.sendBuffer) {
+    (which(packet) ? taken : kept).push(packet);
+  }
+  if (taken.length === 0) {
+    return 0;
+  }
+  socket.sendBuffer.splice(0, socket.sendBuffer.length, ...kept);
   const { acks } = socket as unknown as { readonly acks: Record<string, Ack | undefined> };
-  for (const packet of buffered) {
+  for (const packet of taken) {
     const id = packet.id === undefined ? undefined : String(packet.id);
     const ack = id === undefined ? undefined : acks[id];
     if (id !== undefined && ack !== undefined) {
@@ -82,6 +108,7 @@ function failBuffered(socket: QuickdrawSocket, error: Error): void {
       }
     }
   }
+  return taken.length;
 }
 
 /** A call held until its socket's hello says whom the socket speaks for (`call.ts`). */

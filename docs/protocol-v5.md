@@ -264,7 +264,11 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   `serviceAccess`) and the limits to stay within, and a reconnect's socket
   may act for someone else (a session cookie can change meanwhile). Hold a
   call made before it, and send it only if the hello names the user it was
-  made as. Each hello is a new socket in no app room: make the joining calls
+  made as. A client library may keep what was emitted on the last socket
+  and send it on the next one before that socket's hello (Socket.IO's
+  clients buffer what is emitted while a connection is down, and after a
+  missed ping): take the calls out of such a buffer and hold them, and drop
+  the rest. Each hello is a new socket in no app room: make the joining calls
   again after every one. A `serverId` other than the last hello's means the
   server restarted (or, behind a cluster, another node answered): its state
   starts over.
