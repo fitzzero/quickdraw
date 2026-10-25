@@ -104,8 +104,9 @@ export function ensureImport(
     existing.addNamedImport(specifier);
     return;
   }
-  const index = file.getImportDeclarations().length;
-  file.insertImportDeclaration(index, {
+  // After the last import: an index into the file's statements would count its comments too, and
+  // could land inside a header comment.
+  file.addImportDeclaration({
     moduleSpecifier: module,
     namedImports: [specifier],
     isTypeOnly: typeOnly,
@@ -157,11 +158,15 @@ function usedNames(file: SourceFile): Set<string> {
 /**
  * Removes the import specifiers the file no longer uses (and imports left
  * empty). Side-effect imports stay. With `only`, removes only those names.
+ * The blank line between the imports and what opens the file (a directive,
+ * a header comment) stays: it is the first import's leading trivia, which
+ * removing that import would take with it.
  */
 export function removeUnusedImports(file: SourceFile, only?: ReadonlySet<string>): void {
   const used = usedNames(file);
   const unused = (name: string): boolean =>
     !used.has(name) && (only === undefined || only.has(name));
+  const opening = openingAboveImports(file);
   for (const declaration of file.getImportDeclarations()) {
     const named = declaration.getNamedImports();
     const defaultImport = declaration.getDefaultImport();
@@ -188,6 +193,33 @@ export function removeUnusedImports(file: SourceFile, only?: ReadonlySet<string>
       declaration.remove();
     }
   }
+  keepBlankLineUnder(file, opening);
+}
+
+/** Puts back the blank line under `opening` that removing the file's first import took with it. */
+function keepBlankLineUnder(file: SourceFile, opening: string | undefined): void {
+  if (opening === undefined) {
+    return;
+  }
+  const text = file.getFullText();
+  const rest = text.slice(opening.length);
+  if (text.startsWith(opening) && rest.trim() !== "" && !/^[ \t]*\r?\n[ \t]*\r?\n/u.test(rest)) {
+    file.insertText(opening.length, "\n");
+  }
+}
+
+/**
+ * The text that opens the file above its imports, up to the blank line that
+ * separates the two, when one does: `"use client";`, or a header comment.
+ */
+function openingAboveImports(file: SourceFile): string | undefined {
+  const first = file.getImportDeclarations()[0];
+  if (first === undefined) {
+    return undefined;
+  }
+  const above = file.getFullText().slice(0, first.getStart());
+  const opening = above.trimEnd();
+  return opening !== "" && /\n[ \t]*\r?\n\s*$/u.test(above) ? opening : undefined;
 }
 
 /**
