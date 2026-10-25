@@ -1256,17 +1256,17 @@ A refused acknowledgement is `Failure`: `{ ok: false, e }`, with `e` a
 `WireError`. Its code, and the HTTP status the HTTP transport answers the
 same failure with:
 
-| Code              | HTTP | Meaning                                                 |
-| ----------------- | ---- | ------------------------------------------------------- |
-| `UNAUTHENTICATED` | 401  | there is no principal.                                  |
-| `FORBIDDEN`       | 403  | access was denied.                                      |
-| `NOT_FOUND`       | 404  | an unknown service, method or row.                      |
-| `CONFLICT`        | 409  | a unique or state conflict.                             |
-| `VALIDATION`      | 422  | the input failed its schema; see `ValidationErrorData`. |
-| `RATE_LIMITED`    | 429  | a limiter or a full queue; see `RateLimitedErrorData`.  |
-| `CANCELLED`       | 499  | the caller cancelled.                                   |
-| `TIMEOUT`         | 504  | the handler ran past its time limit.                    |
-| `INTERNAL`        | 500  | anything else.                                          |
+| Code              | HTTP | Meaning                                                                        |
+| ----------------- | ---- | ------------------------------------------------------------------------------ |
+| `UNAUTHENTICATED` | 401  | there is no principal.                                                         |
+| `FORBIDDEN`       | 403  | access was denied.                                                             |
+| `NOT_FOUND`       | 404  | an unknown service, method or row.                                             |
+| `CONFLICT`        | 409  | a unique or state conflict.                                                    |
+| `VALIDATION`      | 422  | the input failed its schema; see `ValidationErrorData`.                        |
+| `RATE_LIMITED`    | 429  | a limiter or a full queue; see `RateLimitedErrorData`.                         |
+| `CANCELLED`       | 499  | the caller cancelled.                                                          |
+| `TIMEOUT`         | 504  | the server stopped waiting; the handler may still commit (an unknown outcome). |
+| `INTERNAL`        | 500  | anything else.                                                                 |
 
 An `INTERNAL` error always carries the message `"Internal error"` and no `data`, whatever failed on the server.
 

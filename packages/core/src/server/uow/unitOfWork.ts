@@ -548,6 +548,9 @@ function createUnit(state: TrackerState, scope: UnitOfWorkScope): UnitOfWork {
     get sqlStatements() {
       return statements;
     },
+    get recorded() {
+      return writes.length;
+    },
     run<T>(fn: () => T | PromiseLike<T>): Promise<T> {
       // Inside an open buffer (a transaction, another unit), this unit joins it, unless it is
       // detached: then it stands alone, outside every frame open where it was begun.

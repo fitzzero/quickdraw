@@ -632,6 +632,15 @@ export const taskService = qd.defineService(task, {
   with transport `"internal"`, so tell a token's call apart by `ctx.mcp`,
   never by `ctx.transport`. It is typed by the `contracts` of
   `initQuickdraw`'s types, as `qd.caller` is.
+- `timeoutMs` is how long the caller waits (else the dispatcher's
+  `limits.callTimeoutMs`, 30 s). At the limit the caller gets `TIMEOUT` and
+  `ctx.signal` aborts, but a handler still running runs on, and what it
+  writes still commits and is pushed: `TIMEOUT` says the server stopped
+  waiting, not that nothing happened. A method that waits on a slow outside
+  API passes it `ctx.signal`, calls `ctx.signal.throwIfAborted()` before it
+  writes the outcome, and sets `timeoutMs` above its slowest path. The
+  server logs a warning (category `quickdraw.call`) when a call that
+  answered `TIMEOUT` goes on to commit writes.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals; `ttlMs` keeps a shared result. A
   `"all"` run's handler sees the first caller's `ctx` and every caller gets
@@ -654,7 +663,8 @@ export const taskService = qd.defineService(task, {
   under a time limit (30 s by default), the result shaped to its output
   (below), output validation outside production, the reply, the flush, and
   one completion record (`onCall`). A mutation ignores the caller's cancel:
-  only its time limit stops it.
+  only its time limit ends the call early, and its handler runs on even then
+  (`timeoutMs`, above).
 - A method's output is sent as it declares it, on every transport and in
   production too, so a handler may return the whole row: a projection
   output (`"entity"`, a named projection) sends the projection's keys,
@@ -672,17 +682,17 @@ throws reaches the caller as `INTERNAL` with a generic message, and is
 logged; Prisma's unique violation becomes `CONFLICT` and its missing row
 `NOT_FOUND`.
 
-| Code              | HTTP | Meaning                                            |
-| ----------------- | ---- | -------------------------------------------------- |
-| `UNAUTHENTICATED` | 401  | no principal                                       |
-| `FORBIDDEN`       | 403  | access denied                                      |
-| `NOT_FOUND`       | 404  | unknown service, method or row                     |
-| `CONFLICT`        | 409  | unique or state conflict                           |
-| `VALIDATION`      | 422  | input failed its schema; `data.issues` lists paths |
-| `RATE_LIMITED`    | 429  | limiter or queue overflow; `data.retryAfterMs`     |
-| `CANCELLED`       | 499  | the caller cancelled                               |
-| `TIMEOUT`         | 504  | the handler ran past its time limit                |
-| `INTERNAL`        | 500  | everything else                                    |
+| Code              | HTTP | Meaning                                                  |
+| ----------------- | ---- | -------------------------------------------------------- |
+| `UNAUTHENTICATED` | 401  | no principal                                             |
+| `FORBIDDEN`       | 403  | access denied                                            |
+| `NOT_FOUND`       | 404  | unknown service, method or row                           |
+| `CONFLICT`        | 409  | unique or state conflict                                 |
+| `VALIDATION`      | 422  | input failed its schema; `data.issues` lists paths       |
+| `RATE_LIMITED`    | 429  | limiter or queue overflow; `data.retryAfterMs`           |
+| `CANCELLED`       | 499  | the caller cancelled                                     |
+| `TIMEOUT`         | 504  | the server stopped waiting; the handler may still commit |
+| `INTERNAL`        | 500  | everything else                                          |
 
 An app adds its own fields to every `ctx` once, through `initQuickdraw`:
 

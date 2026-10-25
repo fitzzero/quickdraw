@@ -83,6 +83,14 @@ export const taskService = qd.defineService(task, {
   quickdraw-access.md), `timeoutMs`, and for queries `share` (`"caller"` or
   `"all"`), `ttlMs` and `version`. A service takes `kinds` too: the kinds of
   principal its methods and subscriptions admit.
+- `timeoutMs` (else `limits.callTimeoutMs`, 30 s) is how long the caller
+  waits: at the limit it gets `TIMEOUT` and `ctx.signal` aborts, but the
+  handler runs on, and what it writes still commits. A handler that waits on
+  a slow outside API passes it `ctx.signal` and calls
+  `ctx.signal.throwIfAborted()` before it writes the outcome, and its
+  method's `timeoutMs` sits above the API's slowest answer. The server warns
+  (category `quickdraw.call`) when a call that answered `TIMEOUT` goes on to
+  commit writes.
 - `share: "all"` runs one handler for every caller, with the first caller's
   `ctx`, and gives every caller its result: use it only for a result that
   depends on the input alone. Its handler reads nothing of the caller

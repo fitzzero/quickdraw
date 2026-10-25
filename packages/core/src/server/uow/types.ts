@@ -114,6 +114,14 @@ export interface UnitOfWork {
   flush(): Promise<void>;
   /** Database statements the run issued, for the completion record; `undefined` when not counted. */
   readonly sqlStatements: number | undefined;
+  /**
+   * The writes `flush` will hand to the sink, until it does: the dispatcher
+   * warns when a call that answered `TIMEOUT` goes on to flush some. A unit
+   * that joined another (inside a transaction or another unit) has none of
+   * its own; they flush with that one. Optional: a unit that does not count
+   * its writes leaves it out, and the dispatcher never warns for it.
+   */
+  readonly recorded?: number;
 }
 
 /** Opens the unit of work of each handler run. A shared query run has one unit for all its callers. */
