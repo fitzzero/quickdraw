@@ -10,7 +10,13 @@
 // it, refuses `"refuse"`, fails `"flaky"` once, and holds `"hold"` until the
 // test lets it answer.
 
-import { QueryClient, onlineManager } from "@tanstack/react-query";
+import {
+  QueryClient,
+  onlineManager,
+  useIsMutating,
+  useMutation,
+  useMutationState,
+} from "@tanstack/react-query";
 import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { Component, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1289,6 +1295,242 @@ function KeptNotes({
   );
   return <p>{`${userId ?? "-"} refused=[${items.join(",")}]`}</p>;
 }
+
+/** What each render of `CacheSeen` showed, with the user the connection acted for then. */
+type CacheLines = [user: string | null, line: string][];
+
+/**
+ * TanStack's own hooks over the mutation cache, filtered on the keys under
+ * `root` (quickdraw's, `"qd"`, by default): what an app's spinner or log of
+ * calls reads, past the mutation hooks' own gate.
+ */
+function CacheSeen({ lines, root = "qd" }: { readonly lines: CacheLines; readonly root?: string }) {
+  const { userId } = useQuickdraw();
+  const mutating = useIsMutating({ mutationKey: [root] });
+  const states = useMutationState({
+    filters: { mutationKey: [root] },
+    select: (cached) => {
+      const variables = cached.state.variables as { readonly text?: string } | undefined;
+      return `${cached.state.status}:${variables?.text ?? "-"}`;
+    },
+  });
+  const line = `mutating=${String(mutating)} states=[${states.join(",")}]`;
+  lines.push([userId, line]);
+  return <p>{`cache ${userId ?? "-"} ${line}`}</p>;
+}
+
+/** Ada signed in, with a hook the test drives (`driven`'s, with `options`), `CacheSeen` beside it, and `extra`. */
+async function watched(principal = { userId: "ada" }, extra?: ReactNode, options?: SaveOptions) {
+  const app = await createTestApp({ services: [noteService] });
+  apps.push(app as unknown as TestApp);
+  const seen: Seen = [];
+  const lines: CacheLines = [];
+  const calls: Calls = { save: undefined, outcomes: [], messages: [], callbacks: [] };
+  const view = await renderWithQuickdraw(
+    <>
+      <Driven calls={calls} seen={seen} {...(options === undefined ? {} : { options })} />
+      <CacheSeen lines={lines} />
+      {extra}
+    </>,
+    { app, as: principal, client: qd },
+  );
+  await within(view.container).findByText(`ada ${IDLE}`);
+  return { app, view, lines, calls };
+}
+
+/** The lines rendered since `from` while the connection acted for `user`. */
+function linesFor(lines: CacheLines, from: number, user: string | null): string[] {
+  return lines.slice(from).flatMap(([who, line]) => (who === user ? [line] : []));
+}
+
+/** Waits until the last render of `CacheSeen` showed `line`. */
+async function cacheShows(lines: CacheLines, line: string): Promise<void> {
+  await waitFor(() => {
+    expect(lines.at(-1)?.[1]).toBe(line);
+  });
+}
+
+/** Runs an app mutation of its own, keyed `["app", "upload"]`, when its button is clicked. */
+function AppUpload() {
+  const upload = useMutation({
+    mutationKey: ["app", "upload"],
+    mutationFn: async (input: { readonly text: string }) => await Promise.resolve(input.text),
+  });
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        upload.mutate({ text: "app-upload" });
+      }}
+    >
+      upload
+    </button>
+  );
+}
+
+describe("quickdraw's mutations in TanStack's mutation cache across a switch of users", () => {
+  it.each([
+    ["a call that succeeded", "ada-note", "success:ada-note"],
+    ["a call the server refused", "refuse", "error:refuse"],
+  ])("leave it at once at another user's hello: %s", async (_what, text, settled) => {
+    const { view, lines, calls } = await watched();
+    act(() => {
+      send(calls, text);
+    });
+    await cacheShows(lines, `mutating=0 states=[${settled}]`);
+    const switched = lines.length;
+    act(() => {
+      view.connection.setAuth({ principal: { userId: "ed" } });
+    });
+    await helloFor(view, "ed");
+    await settle();
+    const ed = linesFor(lines, switched, "ed");
+    expect(ed).not.toHaveLength(0);
+    expect(new Set(ed)).toEqual(new Set(["mutating=0 states=[]"]));
+  });
+
+  it("leave it at once when the server ends the session", async () => {
+    const { app, lines, calls } = await watched();
+    act(() => {
+      send(calls, "ada-note");
+    });
+    await cacheShows(lines, "mutating=0 states=[success:ada-note]");
+    const ended = lines.length;
+    app.server.access.disconnectUser("ada");
+    await cacheShows(lines, "mutating=0 states=[]");
+    expect(new Set(linesFor(lines, ended, null))).toEqual(new Set(["mutating=0 states=[]"]));
+  });
+
+  it("leaves a call pending at the switch once it settles, refused by the hello that names Ed, after Ada's callbacks", async () => {
+    const principal = { userId: "ada" };
+    const { view, lines, calls } = await watched(principal);
+    await view.disconnect();
+    act(() => {
+      send(calls, "ada-held");
+    });
+    // Held by the connection for the next socket's hello: pending in TanStack's cache.
+    await cacheShows(lines, "mutating=1 states=[pending:ada-held]");
+    principal.userId = "ed";
+    const switched = lines.length;
+    await view.reconnect();
+    await settle();
+    expect(calls.outcomes).toEqual(["CANCELLED"]);
+    expect(calls.callbacks).toEqual(["error CANCELLED", "settled CANCELLED"]);
+    const ed = linesFor(lines, switched, "ed");
+    expect(ed).not.toHaveLength(0);
+    expect(new Set(ed)).toEqual(new Set(["mutating=0 states=[]"]));
+    expect(saved).toEqual([]);
+  });
+
+  it("keeps a call paused offline at the switch until it resumes and is refused, then leaves it", async () => {
+    const { view, lines, calls } = await watched();
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      act(() => {
+        send(calls, "ada-offline");
+      });
+      await cacheShows(lines, "mutating=1 states=[pending:ada-offline]");
+      act(() => {
+        view.connection.setAuth({ principal: { userId: "ed" } });
+      });
+      await helloFor(view, "ed");
+      await settle();
+      // TanStack resumes only the paused mutations its cache holds: it stays, pending, meanwhile.
+      expect(lines.at(-1)).toEqual(["ed", "mutating=1 states=[pending:ada-offline]"]);
+      expect(calls.callbacks).toEqual([]);
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    await settle();
+    expect(calls.outcomes).toEqual(["CANCELLED"]);
+    expect(calls.callbacks).toEqual(["error CANCELLED", "settled CANCELLED"]);
+    expect(lines.at(-1)).toEqual(["ed", "mutating=0 states=[]"]);
+    expect(saved).toEqual([]);
+  });
+
+  it("lets go of a call taken out while it waited to retry that pauses later: never sent, and the next user's call with its input is", async () => {
+    held = deferred();
+    const { view, lines, calls } = await watched(undefined, undefined, {
+      retry: 1,
+      retryDelay: 300,
+    });
+    const input = { text: "hold-ada" };
+    act(() => {
+      sendInput(calls, input);
+    });
+    await cacheShows(lines, "mutating=1 states=[pending:hold-ada]");
+    // The drop fails Ada's call INTERNAL: the app's retry waits 300 ms, past Ed's hello.
+    act(() => {
+      view.connection.setAuth({ principal: { userId: "ed" } });
+    });
+    await helloFor(view, "ed");
+    await settle(30);
+    expect(lines.at(-1)).toEqual(["ed", "mutating=0 states=[]"]);
+    // Offline when the retry comes: it pauses out of the cache, which TanStack never resumes.
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      await settle(400);
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    await settle();
+    expect(lines.at(-1)).toEqual(["ed", "mutating=0 states=[]"]);
+    // Its ticket let go, Ed's own call with the same input object goes out, as Ed.
+    act(() => {
+      sendInput(calls, input);
+    });
+    await settle(30);
+    held.resolve();
+    await settle();
+    expect(saved).toEqual([
+      { by: "ada", text: "hold-ada" },
+      { by: "ed", text: "hold-ada" },
+    ]);
+    expect(calls.outcomes).toEqual(["resolved by ed"]);
+  });
+
+  it("keeps the same user's calls through their new credentials", async () => {
+    const { view, lines, calls } = await watched();
+    act(() => {
+      send(calls, "ada-note");
+    });
+    await cacheShows(lines, "mutating=0 states=[success:ada-note]");
+    await act(async () => {
+      view.connection.setAuth({ principal: { userId: "ada" }, refreshed: true });
+      await tick();
+    });
+    await helloFor(view, "ada");
+    await settle();
+    expect(lines.at(-1)).toEqual(["ada", "mutating=0 states=[success:ada-note]"]);
+  });
+
+  it("leaves the app's own mutations, under keys of its own, where they are", async () => {
+    const appLines: CacheLines = [];
+    const { view } = await watched(
+      { userId: "ada" },
+      <>
+        <AppUpload />
+        <CacheSeen lines={appLines} root="app" />
+      </>,
+    );
+    fireEvent.click(within(view.container).getByText("upload"));
+    await cacheShows(appLines, "mutating=0 states=[success:app-upload]");
+    act(() => {
+      view.connection.setAuth({ principal: { userId: "ed" } });
+    });
+    await helloFor(view, "ed");
+    await settle();
+    expect(appLines.at(-1)).toEqual(["ed", "mutating=0 states=[success:app-upload]"]);
+  });
+});
 
 /** A test app whose handshakes wait for `opened` when `holds` says so, as a slow session store would. */
 async function slowHandshakes(

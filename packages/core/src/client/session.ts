@@ -2,9 +2,24 @@
 // 11.5): which user the client's cache holds data for, and what each
 // `qd:hello` does to it, by the rules of `cacheSession.ts`. Emptying the
 // cache removes every quickdraw query (method results, entity and collection
-// entries, held or not, and the versions that come with them) and drops the
+// entries, held or not, and the versions that come with them), takes
+// quickdraw's mutations out of TanStack's mutation cache, and drops the
 // optimistic overlays; the same user on new credentials refetches every
-// quickdraw query, as them.
+// quickdraw query, as them, and keeps their mutations.
+//
+// A mutation leaves the mutation cache at once, but one TanStack holds
+// paused (offline, or queued behind another of its scope), which leaves the
+// moment it settles: TanStack resumes only the paused mutations its cache
+// holds, and runs a scope's next call only from its cache. One taken out
+// while it runs runs on, out of the cache, and settles, and its callbacks
+// run for the user who made it (`mutation.ts`): the hello that empties the
+// cache refuses a call held for it, and any later attempt is refused
+// (`issuer.ts`). A paused one is refused once it resumes; until then
+// TanStack's `useIsMutating` and `useMutationState` still see it. One taken
+// out that pauses later (offline when its retry, or its first attempt after
+// an async `onMutate`, comes) is never resumed, as after
+// `queryClient.clear()`: never sent, its ticket let go (`untilDead`), its
+// callbacks not run.
 //
 // Pushes that say the user's access changed refetch what it may have
 // changed, through the invalidation coordinator (`refetchOnAccessChanges`):
@@ -14,7 +29,7 @@
 // React-free: the provider makes the session of its connection and
 // `QueryClient`, and the live data uses the same one.
 
-import type { QueryClient } from "@tanstack/react-query";
+import type { Mutation, MutationCache, QueryClient } from "@tanstack/react-query";
 import { SERVER_EVENTS } from "../contract/names";
 import { isName, isRecord } from "../protocol/guards";
 import { awaitingHelloOf, cacheSessionOf, type CacheSession } from "./cacheSession";
@@ -36,6 +51,43 @@ export function awaitingHello(connection: QuickdrawConnection, queryClient: Quer
   return awaitingHelloOf(connection, queryClient);
 }
 
+/** Takes `mutation` out of `cache` the moment it settles, once every listener heard it settle. */
+function dropOnceSettled(cache: MutationCache, mutation: Mutation): void {
+  const stop = cache.subscribe((event) => {
+    if (event.mutation !== mutation) {
+      return;
+    }
+    const settled =
+      event.type === "updated" &&
+      (event.action.type === "success" || event.action.type === "error");
+    if (settled || event.type === "removed") {
+      stop();
+    }
+    if (settled) {
+      queueMicrotask(() => {
+        cache.remove(mutation);
+      });
+    }
+  });
+}
+
+/**
+ * Takes quickdraw's mutations, keyed under `["qd", …]`, out of
+ * `queryClient`'s mutation cache at once, but a paused one, which goes the
+ * moment it settles (see the top of this file). The app's own mutations,
+ * under other keys, stay.
+ */
+function dropMutations(queryClient: QueryClient): void {
+  const cache = queryClient.getMutationCache();
+  for (const mutation of cache.findAll({ mutationKey: [KEY_ROOT] })) {
+    if (mutation.state.isPaused) {
+      dropOnceSettled(cache, mutation);
+    } else {
+      cache.remove(mutation);
+    }
+  }
+}
+
 /**
  * The session of `connection` and `queryClient`, made on first use and kept
  * as long as the connection: from then on, every `qd:hello` settles the
@@ -47,6 +99,7 @@ export function sessionOf(connection: QuickdrawConnection, queryClient: QueryCli
   return cacheSessionOf(connection, queryClient, {
     empty: () => {
       queryClient.removeQueries({ queryKey: [KEY_ROOT] });
+      dropMutations(queryClient);
       resetOverlays(queryClient);
     },
     refresh: () => {
