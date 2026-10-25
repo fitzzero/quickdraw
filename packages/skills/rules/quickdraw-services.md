@@ -167,7 +167,12 @@ once:
 - `requireSession(keys)` guards the app's own REST routes.
 - `bearerAuth(...)` is for a hook handed a bearer token alone: the MCP
   bridge's `principal`, an `authenticate` that reads `auth.token`.
-- An app's own MCP transport, or an in-process assistant, that signs the
+- MCP clients connect to `createMcpHttpRouter`'s path itself (`POST /mcp`,
+  MCP's Streamable HTTP transport: `claude mcp add --transport http`), each
+  call as the bearer token's principal through the registry's `principal`
+  hook, behind the router's `allowedOrigins`: never write an MCP transport
+  of your own for agents that bring a token.
+- An app's own MCP route, or an in-process assistant, that signs the
   caller in itself (with `requireSession`, say) passes that caller to the
   registry: `registry.callMethod(service, method, input, { request, principal })`.
   The registry's `principal` hook is not asked (`null` calls anonymously),
