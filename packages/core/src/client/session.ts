@@ -7,6 +7,15 @@
 // optimistic overlays; the same user on new credentials refetches every
 // quickdraw query, as them, and keeps their mutations.
 //
+// Quickdraw's mutations are those its mutation hooks make (marked
+// `meta.qd`, whatever key their options give) and any keyed under
+// `["qd", …]`. Another user's hello takes them out of the mutation cache. A
+// session the server ended leaves them to its next hello, which keeps them
+// when it names the same user, whose calls may still go out as them
+// (`issuer.ts`), and takes them out when it names anyone else: taking a
+// call out at the end would reorder its scope or lose its retry if that user
+// comes back (below). The queries and overlays still go at the end.
+//
 // A mutation leaves the mutation cache at once, but one TanStack holds
 // paused (offline, or queued behind another of its scope), which leaves the
 // moment it settles: TanStack resumes only the paused mutations its cache
@@ -32,8 +41,8 @@
 import type { Mutation, MutationCache, QueryClient } from "@tanstack/react-query";
 import { SERVER_EVENTS } from "../contract/names";
 import { isName, isRecord } from "../protocol/guards";
-import { awaitingHelloOf, cacheSessionOf, type CacheSession } from "./cacheSession";
-import type { QuickdrawConnection } from "./connection";
+import { awaitingHelloOf, cacheSessionOf, userOf, type CacheSession } from "./cacheSession";
+import { endedSessionOf, type QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import { KEY_ROOT, serviceKeyPrefix } from "./keys";
 import { resetOverlays } from "./optimistic";
@@ -71,15 +80,19 @@ function dropOnceSettled(cache: MutationCache, mutation: Mutation): void {
   });
 }
 
+/** True for a mutation of quickdraw's: a mutation hook's (`meta.qd`), or one keyed under `["qd", …]`. */
+function isQuickdraw(mutation: Mutation): boolean {
+  return mutation.meta?.[KEY_ROOT] === true || mutation.options.mutationKey?.[0] === KEY_ROOT;
+}
+
 /**
- * Takes quickdraw's mutations, keyed under `["qd", …]`, out of
- * `queryClient`'s mutation cache at once, but a paused one, which goes the
- * moment it settles (see the top of this file). The app's own mutations,
- * under other keys, stay.
+ * Takes quickdraw's mutations out of `queryClient`'s mutation cache at once,
+ * but a paused one, which goes the moment it settles (see the top of this
+ * file). The app's own mutations stay.
  */
 function dropMutations(queryClient: QueryClient): void {
   const cache = queryClient.getMutationCache();
-  for (const mutation of cache.findAll({ mutationKey: [KEY_ROOT] })) {
+  for (const mutation of cache.findAll({ predicate: isQuickdraw })) {
     if (mutation.state.isPaused) {
       dropOnceSettled(cache, mutation);
     } else {
@@ -96,13 +109,29 @@ function dropMutations(queryClient: QueryClient): void {
  * connection opens.
  */
 export function sessionOf(connection: QuickdrawConnection, queryClient: QueryClient): CacheSession {
+  // The user whose session the server ended, until the next hello: their mutations wait for it.
+  let ended: { readonly user: string | null } | undefined;
+  /** A hello: drops quickdraw's mutations for another user (`switched`) unless a session just ended. */
+  const settleMutations = (switched: boolean): void => {
+    const user = userOf(connection.getState().hello);
+    if (ended === undefined ? switched : ended.user !== user) {
+      dropMutations(queryClient);
+    }
+    ended = undefined;
+  };
   return cacheSessionOf(connection, queryClient, {
     empty: () => {
       queryClient.removeQueries({ queryKey: [KEY_ROOT] });
-      dropMutations(queryClient);
+      if (connection.getState().hello === null) {
+        // The server ended the session (`cacheSession.ts`): its user may come back, and send them.
+        ended ??= { user: userOf(endedSessionOf(connection)?.hello) };
+      } else {
+        settleMutations(true);
+      }
       resetOverlays(queryClient);
     },
     refresh: () => {
+      settleMutations(false);
       void queryClient.invalidateQueries({ queryKey: [KEY_ROOT] });
     },
   });

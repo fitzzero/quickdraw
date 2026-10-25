@@ -64,7 +64,7 @@ import {
   type Ticket,
   type Tickets,
 } from "./issuer";
-import { methodKeyPrefix } from "./keys";
+import { KEY_ROOT, methodKeyPrefix } from "./keys";
 import { createMutationTrace, loopGuardOf, type MutationTrace } from "./loopGuard";
 import type { MethodTarget } from "./members";
 import {
@@ -291,6 +291,8 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
   const own = { mutationKey: methodKeyPrefix(target.service, target.method), ...rest };
   const mutation = useMutation<Output, QuickdrawError, Variables, Context>({
     ...own,
+    // Quickdraw's, whatever key its options give: the cache session finds its calls by it.
+    meta: { ...own.meta, [KEY_ROOT]: true },
     throwOnError: throwShownOnly(queryClient, own, shown),
     retry: retryUnlessUserChanged(queryClient, own),
     mutationFn: (input: Variables) => {

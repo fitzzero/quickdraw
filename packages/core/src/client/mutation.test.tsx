@@ -1350,10 +1350,10 @@ async function cacheShows(lines: CacheLines, line: string): Promise<void> {
   });
 }
 
-/** Runs an app mutation of its own, keyed `["app", "upload"]`, when its button is clicked. */
-function AppUpload() {
+/** Runs an app mutation of its own, keyed `mutationKey` (`["app", "upload"]`), when its button is clicked. */
+function AppUpload({ mutationKey = ["app", "upload"] }: { readonly mutationKey?: string[] }) {
   const upload = useMutation({
-    mutationKey: ["app", "upload"],
+    mutationKey,
     mutationFn: async (input: { readonly text: string }) => await Promise.resolve(input.text),
   });
   return (
@@ -1389,16 +1389,192 @@ describe("quickdraw's mutations in TanStack's mutation cache across a switch of 
     expect(new Set(ed)).toEqual(new Set(["mutating=0 states=[]"]));
   });
 
-  it("leave it at once when the server ends the session", async () => {
-    const { app, lines, calls } = await watched();
+  it.each([
+    [
+      "keeps them when it names the same user",
+      "ada",
+      ["ada", "mutating=0 states=[success:ada-note]"],
+    ],
+    ["takes them out when it names another", "ed", ["ed", "mutating=0 states=[]"]],
+  ])(
+    "waits for the next hello once the server ends the session, and %s",
+    async (_does, next, after) => {
+      const principal = { userId: "ada" };
+      const { app, view, lines, calls } = await watched(principal);
+      act(() => {
+        send(calls, "ada-note");
+      });
+      await cacheShows(lines, "mutating=0 states=[success:ada-note]");
+      app.server.access.disconnectUser("ada");
+      await waitFor(() => {
+        expect(view.connection.getState().status).toBe("disconnected");
+      });
+      // Nobody is known: the queries went at the end, the mutations wait for the next hello.
+      expect(lines.at(-1)).toEqual([null, "mutating=0 states=[success:ada-note]"]);
+      principal.userId = next;
+      const back = lines.length;
+      act(() => {
+        view.connection.open();
+      });
+      await helloFor(view, next);
+      await settle();
+      expect(lines.at(-1)).toEqual(after);
+      expect(new Set(linesFor(lines, back, next))).toEqual(new Set([after[1]]));
+    },
+  );
+
+  it("takes them out at an anonymous hello after the server ended the session", async () => {
+    const { app, view, lines, calls } = await watched();
     act(() => {
       send(calls, "ada-note");
     });
     await cacheShows(lines, "mutating=0 states=[success:ada-note]");
-    const ended = lines.length;
     app.server.access.disconnectUser("ada");
-    await cacheShows(lines, "mutating=0 states=[]");
-    expect(new Set(linesFor(lines, ended, null))).toEqual(new Set(["mutating=0 states=[]"]));
+    await waitFor(() => {
+      expect(view.connection.getState().status).toBe("disconnected");
+    });
+    act(() => {
+      view.connection.setAuth(null);
+    });
+    await waitFor(() => {
+      expect(view.connection.getState().hello).not.toBeNull();
+    });
+    await settle();
+    expect(view.connection.getState().hello?.userId).toBeNull();
+    expect(lines.at(-1)).toEqual([null, "mutating=0 states=[]"]);
+  });
+
+  it("keeps a scope's order across a session the server ended once the same user is back (S1)", async () => {
+    const gate = deferred();
+    const { app, view, calls } = await watched(undefined, undefined, {
+      scope: { id: "notes" },
+      onMutate: async (input) => {
+        if (input.text === "first") {
+          await gate.promise;
+        }
+      },
+    });
+    act(() => {
+      send(calls, "first");
+      send(calls, "second");
+    });
+    await settle(30);
+    app.server.access.disconnectUser("ada");
+    await waitFor(() => {
+      expect(view.connection.getState().status).toBe("disconnected");
+    });
+    act(() => {
+      view.connection.open();
+    });
+    await helloFor(view, "ada");
+    // A focus or an online event: TanStack resumes the paused mutations its cache holds.
+    await act(async () => {
+      void view.queryClient.resumePausedMutations();
+      await tick(50);
+    });
+    gate.resolve();
+    await settle(150);
+    expect(saved).toEqual([
+      { by: "ada", text: "first" },
+      { by: "ada", text: "second" },
+    ]);
+    expect(calls.outcomes).toEqual(["resolved by ada", "resolved by ada"]);
+  });
+
+  it("sends a call waiting to retry across a session the server ended once the same user is back online (S2)", async () => {
+    const { app, view, calls } = await watched(undefined, undefined, { retry: 1, retryDelay: 250 });
+    act(() => {
+      send(calls, "flaky");
+    });
+    // Its first attempt fails INTERNAL: it waits 250 ms to retry.
+    await settle(60);
+    app.server.access.disconnectUser("ada");
+    await waitFor(() => {
+      expect(view.connection.getState().status).toBe("disconnected");
+    });
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    try {
+      // Offline when the retry comes: it pauses, in the cache.
+      await settle(300);
+      act(() => {
+        view.connection.open();
+      });
+      await helloFor(view, "ada");
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
+    await settle(300);
+    expect(saved).toEqual([{ by: "ada", text: "flaky" }]);
+    expect(calls.outcomes).toEqual(["resolved by ada"]);
+  });
+
+  it("forgets the ended session at the hello that settles it: a later switch takes the next user's calls out", async () => {
+    const principal = { userId: "ada" };
+    const { app, view, lines, calls } = await watched(principal);
+    app.server.access.disconnectUser("ada");
+    await waitFor(() => {
+      expect(view.connection.getState().status).toBe("disconnected");
+    });
+    act(() => {
+      view.connection.open();
+    });
+    await helloFor(view, "ada");
+    // A cookie names Ed at a reconnect, then Ada again: no session ends between.
+    await view.disconnect();
+    principal.userId = "ed";
+    await view.reconnect();
+    act(() => {
+      send(calls, "ed-note");
+    });
+    await cacheShows(lines, "mutating=0 states=[success:ed-note]");
+    await view.disconnect();
+    principal.userId = "ada";
+    const switched = lines.length;
+    await view.reconnect();
+    await settle();
+    expect(lines.at(-1)).toEqual(["ada", "mutating=0 states=[]"]);
+    expect(new Set(linesFor(lines, switched, "ada"))).toEqual(new Set(["mutating=0 states=[]"]));
+  });
+
+  it("takes out an app's own mutation keyed under quickdraw's root", async () => {
+    const { view, lines } = await watched(
+      undefined,
+      <AppUpload mutationKey={["qd", "app-upload"]} />,
+    );
+    fireEvent.click(within(view.container).getByText("upload"));
+    await cacheShows(lines, "mutating=0 states=[success:app-upload]");
+    act(() => {
+      view.connection.setAuth({ principal: { userId: "ed" } });
+    });
+    await helloFor(view, "ed");
+    await settle();
+    expect(lines.at(-1)).toEqual(["ed", "mutating=0 states=[]"]);
+  });
+
+  it("takes out the calls of a hook given a key of its own", async () => {
+    const own: CacheLines = [];
+    const { view, calls } = await watched(
+      undefined,
+      <CacheSeen lines={own} root="notes-of-the-app" />,
+      { mutationKey: ["notes-of-the-app"] },
+    );
+    act(() => {
+      send(calls, "ada-note");
+    });
+    await cacheShows(own, "mutating=0 states=[success:ada-note]");
+    const switched = own.length;
+    act(() => {
+      view.connection.setAuth({ principal: { userId: "ed" } });
+    });
+    await helloFor(view, "ed");
+    await settle();
+    const ed = linesFor(own, switched, "ed");
+    expect(ed).not.toHaveLength(0);
+    expect(new Set(ed)).toEqual(new Set(["mutating=0 states=[]"]));
   });
 
   it("leaves a call pending at the switch once it settles, refused by the hello that names Ed, after Ada's callbacks", async () => {
