@@ -1812,11 +1812,14 @@ export function TaskDetail({ id }: { readonly id: string }) {
   its hello says whom. So from the first connect, or a drop, until the
   socket's hello, quickdraw holds calls itself, never in Socket.IO's send
   buffer, and the hello sends them, in the order they were made, or fails
-  `CANCELLED` each one made as someone else. `setAuth`, `close` and a
+  `CANCELLED` each one made as someone else. That includes a call made
+  while a socket whose ping is overdue still reads connected, a moment
+  before it drops: Socket.IO buffers it, and quickdraw takes it back out
+  and holds it, and the drop fails anything else left in that buffer. `setAuth`, `close` and a
   refused session fail the calls held `CANCELLED`; one whose time runs out
   first fails `INTERNAL` ("Not sent: the connection to the server is
-  down"). A channel message (`useChannel`'s `send`) sent before that hello
-  is dropped, as input the next one supersedes, and `isReady` reads false
+  down"). A channel message (`useChannel`'s `send`) sent before that hello,
+  or in that moment, is dropped, as input the next one supersedes, and `isReady` reads false
   meanwhile, though a drop keeps the last hello. The reads that resume live
   rows and collections still go at the connect: their answers follow the
   hello, and a hello naming another user drops them.

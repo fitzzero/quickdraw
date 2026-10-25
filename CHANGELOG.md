@@ -350,6 +350,23 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   refuses ends a session no hello named, so whoever signs in next claims a
   call made after it (the README now says so). A ticket made with no hello
   also stops waiting once other credentials come first.
+- **Nothing Socket.IO buffers after a missed ping goes out on the next
+  socket before its hello.** The hold above starts at a connect or a drop,
+  but a socket still reads connected for a moment after its engine's ping
+  is overdue (a timer the browser throttled, a device asleep), until
+  engine.io closes it a microtask after the next emit notices. Socket.IO
+  puts what is emitted then in its send buffer, and the next connect sent
+  that buffer before the new socket's `qd:hello`: with a cookie naming Ed,
+  Ada's call made then ran as Ed and her code got his answer, and her
+  channel message ran as him; Ada's own reconnect sent hers before her
+  hello. A call Socket.IO buffers so is now taken back out of the buffer
+  at once and held for the next hello like any other: that hello sends it
+  if it names the call's user, after the hello, and fails it `CANCELLED`
+  ("The user changed before the call was sent") if not. The drop then fails
+  whatever else the buffer still holds `CANCELLED` ("The connection
+  dropped before it was sent"): a channel message (dropped, as before the
+  hello), the reads that resume live data (asked for again at the
+  connect), and anything an app emitted on the socket itself.
 - **An app's own hook reads in the provider's first commit.**
   `QuickdrawProvider` bound the typed client to its connection, and opened
   the connection, in passive effects, which React runs after its
