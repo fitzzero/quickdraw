@@ -7,7 +7,7 @@
 //
 // React-free, and TanStack-free.
 
-import type { AnyContract } from "../../contract/defineContract";
+import type { AnyContract, RowSchema } from "../../contract/defineContract";
 import type { EntityOf } from "../../contract/infer";
 import { awaitingHelloOf } from "../cacheSession";
 import { entityKey } from "../keys";
@@ -15,8 +15,11 @@ import { EMPTY_ENTITY, type EntityEntry } from "./entities";
 import { holdingOf, type EntitySnapshot, type Holding } from "./holding";
 import { liveCacheOf, type LiveStore } from "./liveStore";
 
+/** A contract that declares an entity: what `holdEntity` takes. */
+export type EntityContract = AnyContract & { readonly entity: RowSchema };
+
 /** What `holdEntity` holds: one row of a contract's entity. */
-export interface HoldEntityTarget<C extends AnyContract> {
+export interface HoldEntityTarget<C extends EntityContract> {
   readonly contract: C;
   /** The row's id: a non-empty string. */
   readonly id: string;
@@ -42,14 +45,15 @@ function snapshotOf(entry: EntityEntry | undefined): EntitySnapshot<unknown> {
  *   if (task.data?.status === "done") row.release();
  * });
  */
-export function holdEntity<C extends AnyContract>(
+export function holdEntity<C extends EntityContract>(
   store: LiveStore,
   target: HoldEntityTarget<C>,
   listener: (snapshot: EntitySnapshot<EntityOf<C>>) => void,
 ): Holding<EntitySnapshot<EntityOf<C>>> {
   const { contract } = target;
   const id: unknown = target.id;
-  if (contract.entity === undefined) {
+  // Typed out, but a contract cast to it, or plain JavaScript, may still have none.
+  if ((contract as AnyContract).entity === undefined) {
     throw new TypeError(`holdEntity: ${contract.name} declares no entity`);
   }
   if (typeof id !== "string" || id === "") {
