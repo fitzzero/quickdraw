@@ -611,6 +611,20 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   `TypeError` from `createDispatcher`, and one that cannot report writes can
   pass `onWrite: () => () => {}` to evict only at the flush. Apps without
   `cacheMs` are unchanged.
+- **A `createServer` that fails to start leaves nothing attached to the
+  tracked client.** It attached its dispatcher before it checked
+  `http.maxBodyBytes` and `http.rateLimit`, and before Socket.IO made its
+  adapter, so a start that failed there left the dispatcher on the client
+  for the life of the process: the access cache's write listener
+  (`cacheMs`) stayed, writes made outside a call flushed to the failed
+  server again once a later one on the client closed, and a test or
+  supervisor that retried `createServer` on one client piled them up. The
+  HTTP options are now checked with the others, before the dispatcher
+  exists. A start that fails after it (Socket.IO refusing its options, an
+  adapter that cannot be made) detaches it again before the error goes on,
+  as `close()` does. The router goes on the app, and the startup checks
+  start, only once the sockets are made, so a failed start leaves no router
+  on the app and nothing on its HTTP server.
 - **A collection can require a service grant.** `collections: { mine:
 { scopeAccess: "self", requires: { service: "Read" } } }` in
   `defineService` gives a list the grant its methods ask for: besides the

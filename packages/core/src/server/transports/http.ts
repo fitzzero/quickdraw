@@ -359,27 +359,36 @@ function normalizePath(path: string): string {
   return trimmed === "" ? "" : `/${trimmed}`;
 }
 
-/** Resolves the HTTP transport's options. */
-export function httpRouterSettings(
-  options: HttpTransportOptions,
-  base: Pick<HttpRouterSettings, "call" | "resolvePrincipal" | "logger" | "cookieAsToken">,
-): HttpRouterSettings {
+/**
+ * Checks the HTTP transport's options: `TypeError` for a `maxBodyBytes` that
+ * is no whole number of bytes, 1 or more, and a `rateLimit` that is no
+ * middleware. `createServer` checks them before it makes anything, the
+ * dispatcher included, so options it refuses leave nothing attached.
+ */
+export function checkHttpTransportOptions(options: HttpTransportOptions): void {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
     throw new TypeError("http.maxBodyBytes must be a whole number of bytes, 1 or more");
   }
-  const { rateLimit } = options;
-  if (rateLimit !== undefined && typeof rateLimit !== "function") {
+  if (options.rateLimit !== undefined && typeof options.rateLimit !== "function") {
     throw new TypeError(
       "http.rateLimit must be an Express middleware, such as createCallLimiter()",
     );
   }
+}
+
+/** Checks the HTTP transport's options (`checkHttpTransportOptions`) and resolves them. */
+export function httpRouterSettings(
+  options: HttpTransportOptions,
+  base: Pick<HttpRouterSettings, "call" | "resolvePrincipal" | "logger" | "cookieAsToken">,
+): HttpRouterSettings {
+  checkHttpTransportOptions(options);
   return {
     ...base,
     prefix: normalizePath(options.path ?? "/qd"),
-    maxBodyBytes,
+    maxBodyBytes: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
     cookieNaming: transportCookieNaming(options.cookieName),
-    rateLimit,
+    rateLimit: options.rateLimit,
   };
 }
 
