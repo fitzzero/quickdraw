@@ -14,7 +14,8 @@ export {
   type McpStdioServerOptions,
 } from "./stdio";
 export { bootstrapMcpServer } from "./bootstrap";
-export { createMcpHttpRouter, type McpHttpReply, type McpHttpRouterOptions } from "./http";
+export { createMcpHttpRouter, type McpHttpRouterOptions } from "./http";
+export type { McpHttpReply } from "./rest";
 export type {
   DescribeToolsOptions,
   McpBindCall,
