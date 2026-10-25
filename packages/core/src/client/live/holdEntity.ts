@@ -41,8 +41,8 @@ function snapshotOf(entry: EntityEntry | undefined): EntitySnapshot<unknown> {
  * contract with no entity, or an id that is not a non-empty string.
  *
  * @example
- * const row = holdEntity(live, { contract: task, id }, (task) => {
- *   if (task.data?.status === "done") row.release();
+ * const row = holdEntity(live, { contract: task, id }, (shown) => {
+ *   if (shown.data?.status === "done") row.release();
  * });
  */
 export function holdEntity<C extends EntityContract>(

@@ -48,7 +48,8 @@ export type HoldStreamTarget<C extends AnyContract, K extends StreamName<C>> = {
  *
  * @example
  * const logs = holdStream(live, { contract: build, stream: "logs", scope: buildId }, (feed) => {
- *   for (const line of feed.items) process.stdout.write(`${line.text}\n`);
+ *   // the latest `max` items each time, oldest first
+ *   render(feed.items);
  * });
  */
 export function holdStream<C extends AnyContract, K extends StreamName<C>>(
