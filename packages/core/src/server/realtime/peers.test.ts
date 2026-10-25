@@ -12,7 +12,7 @@
 // `test/cluster/peers.test.ts` behind Valkey, put them on two.
 
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { inCluster } from "../../../test/cluster/mode";
 import type { PeerForwardFrame, RelayForwardFrame } from "../../protocol/envelope";
 import {
@@ -368,16 +368,31 @@ describe("relay", () => {
     expect(await c.signal(GAME, a.id, { relay: true })).toEqual(ok);
     await settle(a, b, c);
     const text = message("z".repeat(59_990));
-    for (let n = 0; n < 20; n += 1) {
-      a.relay(GAME, b.id, "rel", text);
-      a.relay(GAME, c.id, "rel", text);
-    }
-    await settle(a, b, c);
-    const delivered = b.relayed.length + c.relayed.length;
     const fit = Math.floor(PEER_RELAY_BYTES_BURST / text.length);
-    expect(delivered).toBeGreaterThanOrEqual(fit);
-    expect(delivered).toBeLessThan(fit + 4);
-    expect(Math.abs(b.relayed.length - c.relayed.length)).toBeLessThanOrEqual(1);
+    /** `count` rounds of one message to Bob, then one to Carol; what each holds once they settle. */
+    const rounds = async (count: number): Promise<number[]> => {
+      for (let n = 0; n < count; n += 1) {
+        a.relay(GAME, b.id, "rel", text);
+        a.relay(GAME, c.id, "rel", text);
+      }
+      await settle(a, b, c);
+      return [b.relayed.length, c.relayed.length];
+    };
+    // The budget refills with time (Date.now): hold the clock, Date only (the sockets' timers stay
+    // real), so a loaded runner cannot refill it while the messages arrive and pick which pass.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // One budget for both peers, taken in the order the messages arrive: the burst, split.
+      expect(await rounds(20)).toEqual([Math.ceil(fit / 2), Math.floor(fit / 2)]);
+      // A tenth of a second refills a tenth of the byte rate: two more fit, again in arrival order.
+      vi.setSystemTime(Date.now() + 100);
+      const left = PEER_RELAY_BYTES_BURST - fit * text.length;
+      const refilled = Math.floor((left + PEER_RELAY_BYTES_PER_SECOND / 10) / text.length);
+      expect(refilled).toBe(2);
+      expect(await rounds(2)).toEqual([Math.ceil(fit / 2) + 1, Math.floor(fit / 2) + 1]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("disconnects a socket that floods it", async () => {
