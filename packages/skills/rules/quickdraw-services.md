@@ -90,7 +90,9 @@ export const taskService = qd.defineService(task, {
   `ctx.signal.throwIfAborted()` before it writes the outcome, and its
   method's `timeoutMs` sits above the API's slowest answer. The server warns
   (category `quickdraw.call`) when a call that answered `TIMEOUT` goes on to
-  commit writes.
+  commit writes. A nested `ctx.services` call's writes flush with its
+  caller's run, so the warning fires only when that outermost call answered
+  `TIMEOUT`.
 - `share: "all"` runs one handler for every caller, with the first caller's
   `ctx`, and gives every caller its result: use it only for a result that
   depends on the input alone. Its handler reads nothing of the caller
@@ -338,8 +340,14 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   so their subscribers and lists are told. A cascade too large for
   Prisma's five-second transaction (a user's delete clearing their rows in
   every service) gets `transaction: { timeoutMs }` beside `prepare`, never
-  a hand-written delete method. The statements of `prepare` and `onWrite`
-  get the development checks a handler's do.
+  a hand-written delete method. The call's own time limit still applies,
+  from the call's start: raise `limits.callTimeoutMs` above the
+  transaction's `timeoutMs` plus `maxWaitMs`, or the caller gets `TIMEOUT`
+  for a write that commits. A method's own `timeoutMs` (on its kit entry)
+  raises it for in-process, HTTP and MCP callers only: a socket client
+  waits `limits.callTimeoutMs` plus 2 s, or its connection's `timeoutMs`.
+  The statements of `prepare` and `onWrite` get the development checks a
+  handler's do.
 
 ## Realtime
 

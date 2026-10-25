@@ -1928,7 +1928,9 @@ native client sends the token as `auth.token`.
   `TIMEOUT` as an unknown outcome (`isUnknownOutcome(error)` on `./client`):
   the write may have happened. The server logs a warning (category
   `quickdraw.call`) when a call that answered `TIMEOUT` goes on to commit
-  writes.
+  writes. A nested `ctx.services` call's writes flush with its caller's
+  run, so the warning fires only when that outermost call answered
+  `TIMEOUT`.
 - **Mutations of an entity are optimistic.** A mutation whose input has `id`
   and whose output is `"entity"` shows its input over the cached row and its
   collection items until the server answers; `optimistic: false` turns that

@@ -1,10 +1,10 @@
-import type { Prisma, PrismaClient } from "@project/db";
-import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
-
 // services/shared/writers.ts: writers a service hands its Prisma client to, as
 // farseer's harness writers take theirs. The service gives the first its own
 // client, and the second the client of the transaction that read what it
 // writes; a test's seed gives the third the app's own client as well.
+
+import type { Prisma, PrismaClient } from "@project/db";
+import type { Tracked, TrackedTransaction } from "@fitzzero/quickdraw-core/prisma";
 
 /** Removes a project's members, as archiving it does. */
 export async function removeProjectMembers(prisma: Tracked<PrismaClient>, projectId: string): Promise<void> {
