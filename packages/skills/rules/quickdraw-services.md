@@ -340,11 +340,14 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   so their subscribers and lists are told. A cascade too large for
   Prisma's five-second transaction (a user's delete clearing their rows in
   every service) gets `transaction: { timeoutMs }` beside `prepare`, never
-  a hand-written delete method. The call's own time limit still applies:
-  raise the method's `timeoutMs` (on its kit entry) or
-  `limits.callTimeoutMs` above the transaction's, or the caller gets
-  `TIMEOUT` for a write that commits. The statements of `prepare` and
-  `onWrite` get the development checks a handler's do.
+  a hand-written delete method. The call's own time limit still applies,
+  from the call's start: raise `limits.callTimeoutMs` above the
+  transaction's `timeoutMs` plus `maxWaitMs`, or the caller gets `TIMEOUT`
+  for a write that commits. A method's own `timeoutMs` (on its kit entry)
+  raises it for in-process, HTTP and MCP callers only: a socket client
+  waits `limits.callTimeoutMs` plus 2 s, or its connection's `timeoutMs`.
+  The statements of `prepare` and `onWrite` get the development checks a
+  handler's do.
 
 ## Realtime
 

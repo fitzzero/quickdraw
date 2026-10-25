@@ -436,10 +436,12 @@ What an app on 5.1.3 checks, each with the entry below that says more:
   positive number of milliseconds a timer honors (at most 2147483647), and
   `transaction` without a hook, which opens no transaction, is a
   `TypeError` from `admin.handlers`. The call's own time limit still
-  applies: raise the method's `timeoutMs` (on its kit entry) or
-  `limits.callTimeoutMs` above the transaction's, or the caller gets
-  `TIMEOUT` for a write that commits. `AdminTransactionOptions` is on
-  `./server`.
+  applies, from the call's start: raise `limits.callTimeoutMs` above the
+  transaction's `timeoutMs` plus `maxWaitMs`, or the caller gets `TIMEOUT`
+  for a write that commits. A method's own `timeoutMs` (on its kit entry)
+  raises it for in-process, HTTP and MCP callers only: a socket client
+  waits `limits.callTimeoutMs` plus 2 s, or its connection's `timeoutMs`.
+  `AdminTransactionOptions` is on `./server`.
 - **The admin kit's `onWrite` gets the development checks.** Its
   statements ran unchecked, as the kit's own do, so a loop of writes in it
   was never reported. It now runs `checked`, as `prepare` and the other

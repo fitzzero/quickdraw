@@ -2954,9 +2954,12 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   (`maxWaitMs`, how long it may wait to start, is Prisma's 2 seconds by
   default; a client's `transactionOptions` changes both for every
   transaction). A write that runs past it is undone and fails `INTERNAL`.
-  The call's own time limit still applies: raise the method's `timeoutMs`
-  (on its kit entry) or `limits.callTimeoutMs` above the transaction's, or
-  the caller gets `TIMEOUT` for a write that commits. The limits are
+  The call's own time limit still applies, from the call's start: raise
+  `limits.callTimeoutMs` above the transaction's `timeoutMs` plus
+  `maxWaitMs`, or the caller gets `TIMEOUT` for a write that commits. A
+  method's own `timeoutMs` (on its kit entry) raises it for in-process,
+  HTTP and MCP callers only: a socket client waits `limits.callTimeoutMs`
+  plus 2 s, or its connection's `timeoutMs`. The limits are
   positive numbers of milliseconds, and `transaction` is refused without a
   hook, which opens no transaction:
 
