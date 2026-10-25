@@ -640,7 +640,9 @@ export const taskService = qd.defineService(task, {
   API passes it `ctx.signal`, calls `ctx.signal.throwIfAborted()` before it
   writes the outcome, and sets `timeoutMs` above its slowest path. The
   server logs a warning (category `quickdraw.call`) when a call that
-  answered `TIMEOUT` goes on to commit writes.
+  answered `TIMEOUT` goes on to commit writes. A nested `ctx.services`
+  call's writes flush with its caller's run, so the warning fires only when
+  that outermost call answered `TIMEOUT`.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals; `ttlMs` keeps a shared result. A
   `"all"` run's handler sees the first caller's `ctx` and every caller gets

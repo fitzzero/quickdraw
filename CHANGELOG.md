@@ -435,9 +435,11 @@ What an app on 5.1.3 checks, each with the entry below that says more:
   `TIMEOUT` at its time limit goes on to commit writes. The warning names
   the method, its time limit and the writes, and says to set `timeoutMs`
   above the method's slowest path or to check `ctx.signal` before writing.
-  A shared run warns once. `UnitOfWork` gains an optional `recorded`, the
-  writes its `flush` will hand on, which `trackPrisma`'s units implement; a
-  unit of work that leaves it out is never warned about. The upgrade guide
+  A shared run warns once. A nested `ctx.services` call's writes flush with
+  its caller's run, so the warning fires only when that outermost call
+  answered `TIMEOUT`. `UnitOfWork` gains an optional `recorded`, the writes
+  its `flush` will hand on, which `trackPrisma`'s units implement; a unit
+  of work that leaves it out is never warned about. The upgrade guide
   ("Defaults that changed"), `UPGRADE-PROMPT.md`, the README and the
   services rule now say what `TIMEOUT` means, and what a method that waits
   on an outside API does about it.
