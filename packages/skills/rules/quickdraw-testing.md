@@ -230,7 +230,13 @@ same way, even from a registry over a strict test app's dispatcher.
   after a known session stands for new credentials awaiting their hello:
   the hooks show nothing cached, and the same user's hello reads every
   query again. Set a stub's answer for the next user before the switch
-  (or `mockReset()` it) when a test checks what they read.
+  (or `mockReset()` it) when a test checks what they read. It does not
+  model two of the real client's rules: a mutation made before new
+  credentials whose attempt starts while they await their hello
+  (`$session({ isKnown: false })` after a known session) calls its stub
+  where the real client refuses it `CANCELLED`, and calls are not held
+  until the socket's hello. Test those against `createTestApp` and the
+  real client.
 - Storybook and other browser bundles import the mock from
   `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
   a decorator wraps every story in `qd.$Provider`, and a story's

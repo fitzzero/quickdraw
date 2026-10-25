@@ -304,7 +304,12 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * a large cascade written in `prepare`, such as a user's delete clearing
    * their rows in every service. Each is a positive number of milliseconds
    * a timer honors; without a hook the kit opens no transaction, so the
-   * option is refused there.
+   * option is refused there. The call's own time limit still applies, from
+   * the call's start: raise `limits.callTimeoutMs` above the transaction's
+   * `timeoutMs` plus `maxWaitMs`, or the caller gets `TIMEOUT` for a write
+   * that commits. A method's own `timeoutMs` (on its kit entry) raises it
+   * for in-process, HTTP and MCP callers only: a socket client waits
+   * `limits.callTimeoutMs` plus 2 s, or its connection's `timeoutMs`.
    *
    * @example
    * transaction: { timeoutMs: 30_000 },

@@ -153,10 +153,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Postgres for the integration tests later packs add; nothing connects to it
-    # yet, and local runs default to PGlite. turbo.json lists DATABASE_URL in the
-    # test task's `env`, without which turbo's strict env mode would hide it
-    # from vitest.
+    # Postgres for the tracked client's real-PostgreSQL suites,
+    # packages/core/src/prisma/postgres.test.ts and the QD_PG_URL case of
+    # src/testing/prisma.test.ts, which skip without QD_PG_URL. Each creates
+    # and drops a database of its own on this server (the service's user is a
+    # superuser); every other suite runs on PGlite. turbo.json lists QD_PG_URL
+    # and DATABASE_URL in the test task's `env`, without which turbo's strict
+    # env mode would hide them from vitest.
     services:
       postgres:
         image: postgres:16-alpine
@@ -173,6 +176,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://quickdraw:quickdraw@localhost:5432/quickdraw_test
+      QD_PG_URL: postgresql://quickdraw:quickdraw@localhost:5432/quickdraw_test
     steps:
       - uses: actions/checkout@v7
         with:

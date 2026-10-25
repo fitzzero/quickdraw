@@ -640,7 +640,9 @@ export const taskService = qd.defineService(task, {
   API passes it `ctx.signal`, calls `ctx.signal.throwIfAborted()` before it
   writes the outcome, and sets `timeoutMs` above its slowest path. The
   server logs a warning (category `quickdraw.call`) when a call that
-  answered `TIMEOUT` goes on to commit writes.
+  answered `TIMEOUT` goes on to commit writes. A nested `ctx.services`
+  call's writes flush with its caller's run, so the warning fires only when
+  that outermost call answered `TIMEOUT`.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals; `ttlMs` keeps a shared result. A
   `"all"` run's handler sees the first caller's `ctx` and every caller gets
@@ -2952,8 +2954,14 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   (`maxWaitMs`, how long it may wait to start, is Prisma's 2 seconds by
   default; a client's `transactionOptions` changes both for every
   transaction). A write that runs past it is undone and fails `INTERNAL`.
-  The limits are positive numbers of milliseconds, and `transaction` is
-  refused without a hook, which opens no transaction:
+  The call's own time limit still applies, from the call's start: raise
+  `limits.callTimeoutMs` above the transaction's `timeoutMs` plus
+  `maxWaitMs`, or the caller gets `TIMEOUT` for a write that commits. A
+  method's own `timeoutMs` (on its kit entry) raises it for in-process,
+  HTTP and MCP callers only: a socket client waits `limits.callTimeoutMs`
+  plus 2 s, or its connection's `timeoutMs`. The limits are
+  positive numbers of milliseconds, and `transaction` is refused without a
+  hook, which opens no transaction:
 
 <!-- example: apps/api/src/services/kits/admin.ts#prepare -->
 
@@ -4607,7 +4615,12 @@ call only to the user it was made as (and refuses one whose user changed
 before it ran), a query reads once a hello names the session's user, and
 `isKnown: false` after a known session is new credentials awaiting their
 hello: the hooks show nothing of what is cached, and the same user's hello
-after it reads every query again:
+after it reads every query again. It does not model two of the real
+client's rules: a mutation made before new credentials whose attempt
+starts while they await their hello calls its stub where the real client
+refuses it `CANCELLED`, and calls are not held until the socket's hello.
+Test those against `createTestApp` and the real client. A test sets the
+session, then renders under `mock.$Provider`:
 
 <!-- example: apps/web/src/components/TaskBoard.test.tsx#session -->
 
