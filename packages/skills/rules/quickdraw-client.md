@@ -39,7 +39,11 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   last results) included. Live entries never take a placeholder, whatever
   the `QueryClient`'s defaults: `useEntity` and `useCollection` show nothing
   of another row, scope or user while a new one loads. A mounted
-  `useMutation` shows none of the last user's calls.
+  `useMutation` shows none of the last user's calls, and TanStack's
+  `useMutationState` and `useIsMutating` find none of quickdraw's but a
+  call TanStack holds paused (offline, or queued in its `scope`), until it
+  resumes and is refused, never sent as the next user. After a session the
+  server ended, the next hello decides: the same user keeps them.
 - `socketOptions` pass through to Socket.IO's `io()`, but `retries`, which
   the connection refuses (`TypeError`): Socket.IO would send an unanswered
   call again on the next connect, before that socket's hello, as whoever it

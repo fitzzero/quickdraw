@@ -2,9 +2,33 @@
 // 11.5): which user the client's cache holds data for, and what each
 // `qd:hello` does to it, by the rules of `cacheSession.ts`. Emptying the
 // cache removes every quickdraw query (method results, entity and collection
-// entries, held or not, and the versions that come with them) and drops the
+// entries, held or not, and the versions that come with them), takes
+// quickdraw's mutations out of TanStack's mutation cache, and drops the
 // optimistic overlays; the same user on new credentials refetches every
-// quickdraw query, as them.
+// quickdraw query, as them, and keeps their mutations.
+//
+// Quickdraw's mutations are those its mutation hooks make (marked
+// `meta.qd`, whatever key their options give) and any keyed under
+// `["qd", …]`. Another user's hello takes them out of the mutation cache. A
+// session the server ended leaves them to its next hello, which keeps them
+// when it names the same user, whose calls may still go out as them
+// (`issuer.ts`), and takes them out when it names anyone else: taking a
+// call out at the end would reorder its scope or lose its retry if that user
+// comes back (below). The queries and overlays still go at the end.
+//
+// A mutation leaves the mutation cache at once, but one TanStack holds
+// paused (offline, or queued behind another of its scope), which leaves the
+// moment it settles: TanStack resumes only the paused mutations its cache
+// holds, and runs a scope's next call only from its cache. One taken out
+// while it runs runs on, out of the cache, and settles, and its callbacks
+// run for the user who made it (`mutation.ts`): the hello that empties the
+// cache refuses a call held for it, and any later attempt is refused
+// (`issuer.ts`). A paused one is refused once it resumes; until then
+// TanStack's `useIsMutating` and `useMutationState` still see it. One taken
+// out that pauses later (offline when its retry, or its first attempt after
+// an async `onMutate`, comes) is never resumed, as after
+// `queryClient.clear()`: never sent, its ticket let go (`untilDead`), its
+// callbacks not run.
 //
 // Pushes that say the user's access changed refetch what it may have
 // changed, through the invalidation coordinator (`refetchOnAccessChanges`):
@@ -14,11 +38,11 @@
 // React-free: the provider makes the session of its connection and
 // `QueryClient`, and the live data uses the same one.
 
-import type { QueryClient } from "@tanstack/react-query";
+import type { Mutation, MutationCache, QueryClient } from "@tanstack/react-query";
 import { SERVER_EVENTS } from "../contract/names";
 import { isName, isRecord } from "../protocol/guards";
-import { awaitingHelloOf, cacheSessionOf, type CacheSession } from "./cacheSession";
-import type { QuickdrawConnection } from "./connection";
+import { awaitingHelloOf, cacheSessionOf, userOf, type CacheSession } from "./cacheSession";
+import { endedSessionOf, type QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import { KEY_ROOT, serviceKeyPrefix } from "./keys";
 import { resetOverlays } from "./optimistic";
@@ -36,6 +60,47 @@ export function awaitingHello(connection: QuickdrawConnection, queryClient: Quer
   return awaitingHelloOf(connection, queryClient);
 }
 
+/** Takes `mutation` out of `cache` the moment it settles, once every listener heard it settle. */
+function dropOnceSettled(cache: MutationCache, mutation: Mutation): void {
+  const stop = cache.subscribe((event) => {
+    if (event.mutation !== mutation) {
+      return;
+    }
+    const settled =
+      event.type === "updated" &&
+      (event.action.type === "success" || event.action.type === "error");
+    if (settled || event.type === "removed") {
+      stop();
+    }
+    if (settled) {
+      queueMicrotask(() => {
+        cache.remove(mutation);
+      });
+    }
+  });
+}
+
+/** True for a mutation of quickdraw's: a mutation hook's (`meta.qd`), or one keyed under `["qd", …]`. */
+function isQuickdraw(mutation: Mutation): boolean {
+  return mutation.meta?.[KEY_ROOT] === true || mutation.options.mutationKey?.[0] === KEY_ROOT;
+}
+
+/**
+ * Takes quickdraw's mutations out of `queryClient`'s mutation cache at once,
+ * but a paused one, which goes the moment it settles (see the top of this
+ * file). The app's own mutations stay.
+ */
+function dropMutations(queryClient: QueryClient): void {
+  const cache = queryClient.getMutationCache();
+  for (const mutation of cache.findAll({ predicate: isQuickdraw })) {
+    if (mutation.state.isPaused) {
+      dropOnceSettled(cache, mutation);
+    } else {
+      cache.remove(mutation);
+    }
+  }
+}
+
 /**
  * The session of `connection` and `queryClient`, made on first use and kept
  * as long as the connection: from then on, every `qd:hello` settles the
@@ -44,12 +109,29 @@ export function awaitingHello(connection: QuickdrawConnection, queryClient: Quer
  * connection opens.
  */
 export function sessionOf(connection: QuickdrawConnection, queryClient: QueryClient): CacheSession {
+  // The user whose session the server ended, until the next hello: their mutations wait for it.
+  let ended: { readonly user: string | null } | undefined;
+  /** A hello: drops quickdraw's mutations for another user (`switched`) unless a session just ended. */
+  const settleMutations = (switched: boolean): void => {
+    const user = userOf(connection.getState().hello);
+    if (ended === undefined ? switched : ended.user !== user) {
+      dropMutations(queryClient);
+    }
+    ended = undefined;
+  };
   return cacheSessionOf(connection, queryClient, {
     empty: () => {
       queryClient.removeQueries({ queryKey: [KEY_ROOT] });
+      if (connection.getState().hello === null) {
+        // The server ended the session (`cacheSession.ts`): its user may come back, and send them.
+        ended ??= { user: userOf(endedSessionOf(connection)?.hello) };
+      } else {
+        settleMutations(true);
+      }
       resetOverlays(queryClient);
     },
     refresh: () => {
+      settleMutations(false);
       void queryClient.invalidateQueries({ queryKey: [KEY_ROOT] });
     },
   });
