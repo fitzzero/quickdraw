@@ -32,6 +32,12 @@ What an app on 5.1.3 checks, each with the entry below that says more:
 - The admin kit's `onWrite` gets the development checks, so a loop of
   writes there is an `n-plus-one`, which a strict test app throws (Server:
   "The admin kit's `onWrite` gets the development checks").
+- With an adapter the app built itself, a presence read or a stream's
+  `subscribers()` in a degraded cluster waits the adapter's own request
+  timeout plus 250 ms (about 5.25 s with the Redis adapter's default),
+  where it waited `cluster.timeoutMs`: lower the adapter's
+  `requestsTimeout` for faster answers (Server: "a count across nodes
+  keeps the answers that came").
 - `setupRedisAdapter` gives the adapter it builds the server's
   `cluster.timeoutMs` (1 s by default) as its new `requestsTimeout`, where
   the Redis adapter's own default is 5 s, which also bounds the app's own
@@ -39,9 +45,13 @@ What an app on 5.1.3 checks, each with the entry below that says more:
   makes it throw a `TypeError` (Server: "`setupRedisAdapter` gives the
   adapter it builds the server's `cluster.timeoutMs`").
 - On a `binary: true` server behind a cluster adapter, a node of an earlier
-  version reads `null` for each binary value a stream pushes from a node of
-  this version: replace every node at once (Server: "A stream's binary
-  items reach the other nodes as binary").
+  version reads `null` for each binary value a seeded or volatile stream
+  pushes from a node of this version: replace every node at once (Server:
+  "A stream's binary items reach the other nodes as binary").
+- A volatile stream sends a burst's items, up to 65 per socket at once,
+  where a subscriber got only the first: push a snapshot instead of a
+  bigger burst (Server: "a volatile stream drops an item only while the
+  socket's connection is backed up").
 - Every call waits for its socket's own `qd:hello`, so a test double or a
   fake server must send one (Client: "A call goes out only on a socket
   whose own hello names its user").
@@ -249,10 +259,10 @@ What an app on 5.1.3 checks, each with the entry below that says more:
   that `CANCELLED`, unless the cache was emptied for another user
   meanwhile. A paused call that TanStack drops unsettled
   (`queryClient.clear()` while offline) no longer holds its input against
-  later calls. **Behavior change:** a call whose attempt starts while new
-  credentials await their hello is refused this way, even for the same
-  user, as a call waiting in the send buffer then always was (it is not
-  held until the hello: send it again from `onError`); a call made while
+  later calls. **Behavior change:** a call made before new credentials whose
+  attempt starts while they await their hello is refused this way, even for
+  the same user, as a call waiting in the send buffer then always was (it is
+  not held until the hello: send it again from `onError`); a call made while
   no hello is held now shows while none is held (it showed idle until the
   next hello, and a failure before any hello was never shown), so a slow
   first connect shows the call pending, and a call after the server ended
@@ -387,7 +397,9 @@ What an app on 5.1.3 checks, each with the entry below that says more:
   where the Redis adapter's own default is 5,000), so that node's presence
   reads and counts answer that soon in a degraded cluster. Its new
   `requestsTimeout` option sets another value. The value also bounds the
-  app's own `fetchSockets` through that adapter.
+  app's own `fetchSockets` through that adapter. A value that is not a
+  number of milliseconds above 0, the option's or `cluster.timeoutMs`, is
+  a `TypeError` from `setupRedisAdapter`, before it connects.
 - **A session's token expires with its session, never before.**
   `issueSession` signed the token's `exp` as a span from the current whole
   second, so the token ended up to 999 ms before its session, and a 1 s
