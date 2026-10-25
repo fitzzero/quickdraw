@@ -3,7 +3,7 @@
 // hooks show the rows and scopes the test sets, and a component re-renders
 // when the test changes them.
 
-import { useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQueryClient } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -542,6 +542,46 @@ describe("the mock across a switch of users", () => {
     expect(qd.task.get.calls).toEqual([{ id: "t1" }, { id: "t1" }]);
   });
 
+  it("takes no placeholder of the last user's result, under keepPreviousData too", async () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    function Title() {
+      const { userId } = useQuickdraw();
+      const got = qd.task.get.useQuery({ id: "t1" }, { placeholderData: keepPreviousData });
+      return (
+        <p>{`${String(userId)} ${got.data?.title ?? got.status} ${String(got.isPlaceholderData)}`}</p>
+      );
+    }
+    qd.task.get.mockResolvedValue(cardOf("t1", "ada-note"));
+    render(<Title />, { wrapper: qd.$Provider });
+    await screen.findByText("ada ada-note false");
+    act(() => {
+      qd.task.get.mockReset();
+    });
+    act(() => {
+      qd.$session({ userId: "ed" });
+    });
+    await screen.findByText("ed pending false");
+  });
+
+  it("reads under the session of the $Provider it renders in: a signed-out story's waits", async () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    const seen: string[] = [];
+    const Board = boardOf(qd, seen);
+    qd.task.get.mockResolvedValue(cardOf("t1", "ada-note"));
+    render(
+      <qd.$Provider session={{ userId: null, isKnown: false }}>
+        <Board />
+      </qd.$Provider>,
+    );
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    });
+    expect(screen.getByText("null get=pending rename=idle data=- vars=- error=-")).toBeTruthy();
+    expect(qd.task.get.calls).toEqual([]);
+  });
+
   it("reads once a hello names the session's user, as the real client does", async () => {
     const qd = createMockClient({ task }, { session: { userId: "ada", isKnown: false } });
     const seen: string[] = [];
@@ -679,6 +719,8 @@ describe("after each test", () => {
     });
     expect(screen.getByText("title Third")).toBeTruthy();
     expect(qd.task.get.calls).toHaveLength(1);
+    // Still cached: no switch of users emptied it.
+    expect(qd.$queryClient.getQueryCache().findAll({ queryKey: ["qd"] })).toHaveLength(1);
   });
 });
 

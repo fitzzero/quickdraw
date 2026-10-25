@@ -10,8 +10,10 @@
 //   method's stub; the admin kit's reads of rows default to `staleTime: 0`
 //   as on the typed client, so they ask their stub again on every mount.
 //   `call` and `prefetch` answer from the stub too. A mutation's
-//   `useMutation` is TanStack's `useMutation` over the stub. Optimistic
-//   layers are not shown: the test sets the rows a component reads.
+//   `useMutation` is TanStack's `useMutation` over the stub. Both follow
+//   the session by the real client's rules (`mockCalls.ts`), and so does
+//   the mock's cache (`mockSession.tsx`). Optimistic layers are not shown:
+//   the test sets the rows a component reads.
 // - Every method's member carries its stub (`mockResolvedValue`,
 //   `mockRejectedValue`, `mockImplementation`, `mockReset`, `calls`). A new
 //   answer refetches the method's queries cached when it is set, once each;

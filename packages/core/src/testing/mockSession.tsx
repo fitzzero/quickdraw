@@ -14,6 +14,11 @@
 //   the session is known (a socket is in no room before its hello).
 // - The views of the mock's collections select members for the session's
 //   user, as the real ones do for the user the hello names.
+// - The mock's cache follows the mock's own session through the real cache
+//   session (`../client/session.ts`): a session naming another user removes
+//   quickdraw's queries and mutations, and the same user's first known
+//   session after an unknown one reads every query again. It follows the
+//   resets too, which tell no hook (`resettle`).
 // - `<mock.$Provider session={...}>` lays its `session` over the mock's for
 //   what renders inside it (finding F6.2): its own connection shows that
 //   session, and the mock's hooks read it from `mockScope.ts`, so stories

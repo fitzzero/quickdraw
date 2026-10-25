@@ -889,6 +889,28 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
 
 ### Testing
 
+- **The mock client follows its session as the real client does.** A
+  `$session` that named another user changed only what `useQuickdraw()`
+  read: the mock's cache and its mutation hooks kept the last user's state,
+  so after `$session({ userId: "ed" })` a component rendered `ed
+get=ada-note rename=success data=ada-input vars=ada-input`, and a
+  switch-of-users test could pass a component that leaned on the leak, or
+  fail a correct one. The mock's cache now follows its own session through
+  the real cache session: another user's hello removes its quickdraw
+  queries and mutations, and the same user's first hello after none reads
+  every query again. Its mutation hooks run under the real mutation hook's
+  rules, from the same code (`useUserMutation`): a call is shown only to
+  the user it was made as, `throwOnError` throws only what it shows, and a
+  call whose user changed before its attempt fails `CANCELLED`, its stub
+  never called. Its query hooks read once a hello names the session's user,
+  show nothing cached while it awaits one (`$session({ isKnown: false })`
+  after a known session, as new credentials await theirs), and take no
+  placeholder of a result the cache no longer holds. Under a `$Provider`
+  with a `session` prop, the hooks follow that session; the one cache
+  follows the mock's own. **Behavior change:** a mock made with
+  `isKnown: false` no longer reads before `$session({ isKnown: true })`,
+  and the same user known again after `isKnown: false` reads its queries
+  again, so `calls` counts that read.
 - **`app.as(principal, { transport, mcp })` calls in process as another
   transport would.** `app.as(principal)` always called with transport
   `"internal"` and no `ctx.mcp`, so a test of a guard that reads either
