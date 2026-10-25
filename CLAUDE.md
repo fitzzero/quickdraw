@@ -65,7 +65,8 @@ Each package's export map lives in its own `package.json`. Core's has `.`
 dependency-free), `./server`, `./server/auth`, `./server/express`,
 `./server/mcp`, `./server/otel`, `./prisma`, `./client` (opens with
 `"use client"`), `./client/core` (the client without React or TanStack:
-the connection, calls, auth helpers, peer links and host mode, plus
+the connection, calls, auth helpers, peer links and host mode, the live
+store (`liveStoreOf`, `holdEntity`, `holdCollection`, `holdStream`), plus
 `./utils`; `./client` re-exports it), `./utils` (isomorphic:
 `createServerCaller`, cache keys, formatting), `./parser` (the JSON-only
 Socket.IO parser, kept out of the root), `./testing`, `./testing/client`,
@@ -77,8 +78,10 @@ the `"use client"` that must open `dist/client/index.js`, and that
 declarations (it also runs `scripts/client-core-smoke.mjs`, which calls a
 built server through it with both refused).
 Tests sit next to sources (`*.test.ts(x)`) and are typechecked. Core's vitest
-config has three projects: `node` (`*.test.ts`), `dom` (`*.test.tsx`, jsdom)
-and `types` (`*.test-d.ts`).
+config has five projects: `node` (`*.test.ts`), `client-core`
+(`test/client-core`, run with React and TanStack Query refused), `dom`
+(`*.test.tsx`, jsdom), `readme` (the README app's component tests,
+`test/readme/apps/web`) and `types` (`*.test-d.ts`).
 
 ### README examples
 
