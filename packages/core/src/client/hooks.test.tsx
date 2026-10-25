@@ -5,7 +5,7 @@
 // the README's AuthGate through a server that cannot authenticate a
 // reconnect (never the sign-in) and one that refuses it (the sign-in).
 
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, useQuery } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it } from "vitest";
@@ -363,6 +363,54 @@ describe("QuickdrawProvider", () => {
     view.unmount();
     await until(() => view.result.current.connection.getState().status === "idle");
     await expect(qd.counter.total.call()).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+
+  /**
+   * An app's own TanStack `useQuery` over a member's `key` and `call` (the
+   * form the client rule allows for hooks the typed client has none of),
+   * failing at once: no retry hides a first read that fails.
+   */
+  function AppTotal() {
+    const total = useQuery({
+      queryKey: [...qd.counter.total.key(), "app"],
+      queryFn: () => qd.counter.total.call(),
+      retry: false,
+    });
+    if (total.error !== null) {
+      return (
+        <p>{`refused ${String((total.error as QuickdrawError).code)}: ${total.error.message}`}</p>
+      );
+    }
+    return <p>{total.data === undefined ? "loading" : `total ${String(total.data)}`}</p>;
+  }
+
+  it("lends the client to an app's own hook that reads in the provider's first commit, strict mode and a new provider too", async () => {
+    const { app } = await harness.start();
+    // The provider's direct child, mounted with it: its read starts in its own effects.
+    const view = render(
+      <Provider key="first" url={app.url}>
+        <AppTotal />
+      </Provider>,
+    );
+    await screen.findByText("total 0");
+    // A new provider (another url makes one): the old unbinds as the new one binds, before its children read.
+    view.rerender(
+      <Provider key="second" url={app.url}>
+        <AppTotal />
+      </Provider>,
+    );
+    await screen.findByText("total 0");
+    view.unmount();
+    // Strict mode mounts effects twice: the binding is made again before the children's passive ones.
+    render(
+      <React.StrictMode>
+        <Provider url={app.url}>
+          <AppTotal />
+        </Provider>
+      </React.StrictMode>,
+    );
+    await screen.findByText("total 0");
+    expect(screen.queryByText(/^refused/)).toBeNull();
   });
 
   it("says when the user is known and while it reconnects, and forgets the user on new credentials until their hello", async () => {

@@ -41,9 +41,18 @@ export interface StorageAdapter {
   count(model: string, args?: CountArgs): Promise<number>;
   /**
    * Calls `listener` with every write the adapter records, once it is
-   * durable: when it lands in a unit of work, or flushes on its own. Writes
-   * inside a transaction arrive when it commits; a rolled-back write never
-   * arrives. Returns a function that removes the listener.
+   * durable, and returns a function that removes the listener. The access
+   * cache (`cacheMs`) evicts from here, and a check later in the writing
+   * call relies on this timing, which an adapter keeps:
+   *
+   * - Synchronously, before the write's promise settles for its caller: a
+   *   write's own `await`, or for a transaction's writes its `$transaction`.
+   * - Only for durable writes: one made outside every transaction at once
+   *   (when it lands in a unit of work, or flushes on its own), a
+   *   transaction's when it commits, a savepoint's when the outermost
+   *   transaction around it commits, and a rolled-back write never.
+   * - A listener that throws is logged; the write still lands and the other
+   *   listeners are still called.
    */
   onWrite(listener: (write: WriteRecord) => void): () => void;
   /** Runs `fn` and counts the database statements it issued, the adapter's own reads included. */

@@ -32,8 +32,8 @@ import { collectionKey } from "../keys";
 import type { CollectionController } from "./collectionController";
 import type { IndexRow } from "./collectionIndex";
 import type { CollectionEntry, CollectionTarget } from "./collectionLoads";
-import { entryQuery } from "./host";
 import {
+  entryQuery,
   useLiveData,
   useOverlayView,
   useRefusedItems,

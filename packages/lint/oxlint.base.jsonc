@@ -97,6 +97,9 @@
     // Frames come from tracked writes; access is declared.
     "quickdraw/no-manual-emit": "error",
     "quickdraw/no-inline-auth-guard": "error",
+    // A plain Error thrown to refuse credentials reads as an outage, which the client retries
+    // for ever. A warning so an upgrade never breaks lint.
+    "quickdraw/no-plain-error-refusal": "warn",
     // Performance.
     "quickdraw/no-unbounded-read": "error",
     "quickdraw/no-db-call-in-loop": "error",

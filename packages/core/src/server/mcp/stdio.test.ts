@@ -135,6 +135,25 @@ describe("the stdio server", () => {
     });
   });
 
+  it("answers a token the principal hook refuses UNAUTHENTICATED, and a hook that fails INTERNAL", async () => {
+    const refusing = open(agentAuth(() => "stolen-token"));
+    const refused = await refusing.request(7, "tools/call", { name: "taskService_whoami" });
+    expect(refused.result).toMatchObject({ isError: true });
+    expect(textOf(refused)).toEqual({ code: "UNAUTHENTICATED", message: "Authentication failed" });
+    // The token store is down: the token may well be good, so the agent is not told it is not.
+    const failing = open({
+      principal: () => {
+        throw new Error("the token store is down");
+      },
+    });
+    const down = await failing.request(8, "tools/call", { name: "taskService_whoami" });
+    expect(down.result).toMatchObject({ isError: true });
+    expect(textOf(down)).toEqual({ code: "INTERNAL", message: "Internal error" });
+    expect(failing.logger.at("error").map((entry) => entry.message)).toEqual([
+      "MCP authentication failed",
+    ]);
+  });
+
   it("answers protocol errors with JSON-RPC error codes, and ignores a client's response", async () => {
     const { request, send, reply, input, messages } = open();
     expect(await request(6, "resources/list")).toEqual({

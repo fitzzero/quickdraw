@@ -284,7 +284,7 @@ describe("sessions", () => {
     expect(seen).toEqual([stdio("s9")]);
   });
 
-  it("answers UNAUTHENTICATED when principal fails, and lets an anonymous caller call public methods only", async () => {
+  it("answers UNAUTHENTICATED when principal refuses, and lets an anonymous caller call public methods only", async () => {
     const { registry, logger } = setup(agentAuth(() => "stolen-token"));
     const refused = await registry.call("taskService_list", {}, { request: stdio() });
     expect(errorOf(refused)).toMatchObject({
@@ -295,17 +295,18 @@ describe("sessions", () => {
     expect(logger.at("error")).toEqual([]);
     expect(logger.at("debug").map((entry) => entry.message)).toContain("MCP authentication failed");
     expect(JSON.stringify(logger.entries)).not.toContain("stolen-token");
-    // A hook that breaks is still an error.
-    const broken = setup({
+    // A FORBIDDEN refusal is a refusal too, answered UNAUTHENTICATED as before.
+    const forbidden = setup({
       principal: () => {
-        throw new Error("the token store is down");
+        throw new QuickdrawError("FORBIDDEN", "Not from this host");
       },
     });
-    const down = await broken.registry.call("taskService_list", {}, { request: stdio() });
-    expect(errorOf(down).code).toBe("UNAUTHENTICATED");
-    expect(broken.logger.at("error").map((entry) => entry.message)).toEqual([
-      "MCP authentication failed",
-    ]);
+    const elsewhere = await forbidden.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(elsewhere)).toMatchObject({
+      code: "UNAUTHENTICATED",
+      message: "Authentication failed",
+    });
+    expect(forbidden.logger.at("error")).toEqual([]);
     const anonymous = setup({ principal: () => null, context: undefined }).registry;
     expect(await anonymous.call("taskService_whoami", {}, { request: stdio() })).toMatchObject({
       ok: true,
@@ -313,6 +314,59 @@ describe("sessions", () => {
     });
     const get = await anonymous.call("taskService_get", { id: "t1" }, { request: stdio() });
     expect(errorOf(get).code).toBe("UNAUTHENTICATED");
+  });
+
+  it("answers INTERNAL when principal fails any other way, an outage: the token may well be good", async () => {
+    const context = vi.fn(() => ({ scopes: [] }));
+    const respond = vi.fn();
+    const broken = setup({
+      principal: () => {
+        throw new Error("the token store is down");
+      },
+      context,
+    });
+    const down = await broken.registry.call("taskService_list", {}, { request: stdio(), respond });
+    expect(errorOf(down)).toMatchObject({ code: "INTERNAL", message: "Internal error" });
+    // What a stdio client sees: a tool error carrying INTERNAL, never UNAUTHENTICATED.
+    expect(toToolResult(down)).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ code: "INTERNAL", message: "Internal error" }, null, 2),
+        },
+      ],
+      isError: true,
+    });
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(down);
+    // Logged once at error, with what the hook threw, and not again as a failed tool.
+    expect(broken.logger.at("error")).toEqual([
+      expect.objectContaining({
+        message: "MCP authentication failed",
+        meta: expect.objectContaining({
+          transport: "stdio",
+          error: expect.objectContaining({ message: "the token store is down" }),
+        }),
+      }),
+    ]);
+    expect(context).not.toHaveBeenCalled();
+    expect(broken.records).toEqual([]);
+    // A QuickdrawError of another code, and a principal of the wrong shape, are the app's too.
+    const other = setup({
+      principal: () => {
+        throw new QuickdrawError("NOT_FOUND", "No such token row");
+      },
+    });
+    const missing = await other.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(missing).code).toBe("INTERNAL");
+    const malformed = setup({ principal: () => ({ userId: "" }) as AgentPrincipal });
+    const odd = await malformed.registry.call("taskService_list", {}, { request: stdio() });
+    expect(errorOf(odd).code).toBe("INTERNAL");
+    for (const { logger } of [other, malformed]) {
+      expect(logger.at("error").map((entry) => entry.message)).toEqual([
+        "MCP authentication failed",
+      ]);
+    }
   });
 
   it("fails a call with INTERNAL when context throws or returns something other than fields", async () => {
@@ -500,6 +554,115 @@ describe("calls through ctx.services", () => {
     });
     // The same principal over a socket carries no ctx.mcp, and the guard lets it in, as before.
     expect(await reader.viaSocket("rename", input)).toMatchObject({ ok: true, data: "Ship it" });
+  });
+});
+
+describe("the mcp-principal-threw development warning", () => {
+  const THREW = "[quickdraw:mcp-principal-threw]";
+  const threw = (logger: ReturnType<typeof captureLogger>) =>
+    logger.at("warn").filter((entry) => entry.message.startsWith(THREW));
+
+  /** A `principal` hook failing as the session says. */
+  const failing = (request: McpRequest): AgentPrincipal | null => {
+    switch (request.sessionId) {
+      case "broken":
+        throw new TypeError("the token store is down");
+      case "refused":
+        throw new QuickdrawError("UNAUTHENTICATED", "Unknown agent token");
+      case "elsewhere":
+        throw new QuickdrawError("FORBIDDEN", "Not from this host");
+      case "down":
+        throw new QuickdrawError("INTERNAL", "The token store is down");
+      case "odd":
+        return { userId: "" } as AgentPrincipal;
+      default:
+        return null;
+    }
+  };
+
+  it("is logged once per registry when the principal hook throws anything but a QuickdrawError", async () => {
+    const { registry, dispatcher, logger, services } = setup({ principal: failing });
+    for (const attempt of [1, 2]) {
+      const down = await registry.call("taskService_list", {}, { request: stdio("broken") });
+      expect(errorOf(down).code, `call ${String(attempt)}`).toBe("INTERNAL");
+    }
+    expect(threw(logger)).toEqual([
+      {
+        level: "warn",
+        message: expect.stringContaining(
+          "the MCP registry's principal hook threw something other than a QuickdrawError (TypeError)",
+        ) as string,
+        meta: { category: "quickdraw.dev", warning: "mcp-principal-threw", thrown: "TypeError" },
+      },
+    ]);
+    // It names the fix: refuse with a QuickdrawError, or let the caller in anonymously.
+    expect(threw(logger)[0]?.message).toContain('throw new QuickdrawError("UNAUTHENTICATED", ...)');
+    expect(threw(logger)[0]?.message).toContain("return null");
+    // Another registry warns once of its own.
+    const other = createMcpRegistry({
+      services: [services.taskService, services.noteService],
+      dispatcher,
+      logger,
+      principal: failing,
+    });
+    await other.callMethod("noteService", "search", "rfc", { request: stdio("broken") });
+    expect(threw(logger)).toHaveLength(2);
+  });
+
+  it("is never logged for a QuickdrawError, whatever its code, nor for a principal of the wrong shape", async () => {
+    const { registry, logger } = setup({ principal: failing });
+    const codeOf = async (sessionId: string) =>
+      errorOf(await registry.call("taskService_list", {}, { request: stdio(sessionId) })).code;
+    expect(await codeOf("refused")).toBe("UNAUTHENTICATED");
+    expect(await codeOf("elsewhere")).toBe("UNAUTHENTICATED");
+    // An app's own INTERNAL says the server failed, on purpose: answered as one, unwarned.
+    expect(await codeOf("down")).toBe("INTERNAL");
+    // The hook returned a principal it should not have: the app's bug, but no throw.
+    expect(await codeOf("odd")).toBe("INTERNAL");
+    expect(threw(logger)).toEqual([]);
+  });
+
+  it("is off in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const { registry, logger } = setup({ principal: failing });
+      const down = await registry.call("taskService_list", {}, { request: stdio("broken") });
+      expect(errorOf(down).code).toBe("INTERNAL");
+      expect(threw(logger)).toEqual([]);
+      expect(logger.at("error").map((entry) => entry.message)).toEqual([
+        "MCP authentication failed",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("is logged, never thrown, over a strict test app's dispatcher: a session is no call", async () => {
+    const probe = createProbe();
+    const app = await createTestApp({ services: [probe.service], db, strictWarnings: true });
+    try {
+      const logger = captureLogger();
+      const registry = createMcpRegistry({
+        services: [probe.service],
+        dispatcher: app.server.dispatcher,
+        principal: () => {
+          throw new Error("the token store is down");
+        },
+        logger,
+      });
+      for (const attempt of [1, 2]) {
+        const down = await registry.callMethod(
+          "probeService",
+          "moderate",
+          { value: 2 },
+          { request: stdio() },
+        );
+        expect(errorOf(down).code, `call ${String(attempt)}`).toBe("INTERNAL");
+      }
+      expect(threw(logger)).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
   });
 });
 

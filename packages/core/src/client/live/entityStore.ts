@@ -1,5 +1,5 @@
-// The live entities of one connection and `QueryClient` (RFC 0003 sections 6
-// and 11.5): rows subscribed by id, kept current by `qd:e` frames, cached
+// The live entities of one connection and cache (RFC 0003 sections 6 and
+// 11.5): rows subscribed by id, kept current by `qd:e` frames, cached
 // under `["qd", service, "e", id]`.
 //
 // - Subscriptions are counted per row (`registry.ts`): the first holding of
@@ -22,8 +22,8 @@
 // - A different user on the connection (`forget`) drops every row and asks
 //   for them again without revisions.
 //
-// React-free: the live data (`liveData.ts`) makes one per connection and
-// `QueryClient`, and routes frames to it (`demux.ts`).
+// React-free and TanStack-free: the live data has one per connection and
+// cache (`stores.ts`), and routes frames to it (`demux.ts`).
 
 import { CLIENT_EVENTS } from "../../contract/names";
 import type { QuickdrawError } from "../../protocol/errors";
@@ -52,7 +52,7 @@ import {
 } from "./host";
 import { createRegistry, type Registry } from "./registry";
 
-/** The live entities of one connection and `QueryClient`. */
+/** The live entities of one connection and cache. */
 export interface EntityStore {
   /** Holds rows `ids` of `service` for one user of them; returns the release. */
   subscribe(service: string, ids: readonly string[]): () => void;
@@ -266,6 +266,7 @@ export function createEntityStore(host: LiveHost): EntityStore {
       state.wanted.get(row.service)?.delete(row.id);
       add(state.leaving, row.service, row.id);
       schedule(state);
+      state.host.cache.release(entityKey(row.service, row.id));
       if (state.registry.held().length === 0) {
         stopRetries(state);
       }
@@ -281,6 +282,7 @@ export function createEntityStore(host: LiveHost): EntityStore {
       const holdings = [...new Set(ids)].map((id) => {
         const holding = state.registry.acquire(rowKey(service, id), () => ({ service, id }));
         if (holding.isNew) {
+          state.host.cache.hold(entityKey(service, id));
           want(state, service, id);
         }
         return holding;

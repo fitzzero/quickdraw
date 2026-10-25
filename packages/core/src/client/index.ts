@@ -11,17 +11,19 @@
 // for client code.
 //
 // The layers, none of which needs the DOM:
-// - `./client/core`: the connection, calls, the auth helpers, peer links and
-//   host mode, with ./utils; no React and no TanStack, for Node scripts,
-//   CLIs and workers, which import that entry instead of this one;
+// - `./client/core`: the connection, calls, the auth helpers, peer links,
+//   host mode and a script's live store (`liveStoreOf` and the holdings),
+//   with ./utils; no React and no TanStack, for Node scripts, CLIs and
+//   workers, which import that entry instead of this one;
 // - the invalidation coordinator, the overlay store, the cache session and
-//   live data, still without React but on a TanStack `QueryClient`, for
-//   React Native and Node clients that keep one;
+//   the live data of a `QueryClient` (`liveDataOf`), still without React but
+//   on a TanStack `QueryClient`, for React Native and Node clients that keep
+//   one;
 // - the provider and the typed client's hooks, on top.
 
 // The client without React or TanStack (also on ./client/core), the same
-// functions: the connection, calls, auth helpers, peer links, host mode and
-// everything on ./utils.
+// functions: the connection, calls, auth helpers, peer links, host mode, a
+// script's live store and everything on ./utils.
 export * from "./core";
 
 // Invalidation and optimistic overlays, without React.
@@ -45,6 +47,9 @@ export {
   type RefusedAddition,
 } from "./optimistic";
 export { refetchOnAccessChanges, sessionOf, type CacheSession, type HelloChange } from "./session";
+// The `placeholderData` of an app's own TanStack hook over a member's `key` and `call`: never a
+// result another user's session left (a member's `useQuery` and `useSearch` guard their own).
+export { placeholderFromSession } from "./queryHooks";
 
 // Live entities and collections, without React: the state the hooks show
 // (cached under `entityKey` and `collectionKey`), the pure merge functions

@@ -90,6 +90,18 @@ export type AdminOnCommitted<Row = unknown> = (
   ctx: KitContext,
 ) => void | PromiseLike<void>;
 
+/**
+ * `admin.handlers`' `transaction`: the time limits of the transaction the
+ * kit writes in when `prepare`, `onWrite` or `onCommitted` is given, in
+ * milliseconds; each left out keeps the database client's default.
+ */
+export interface AdminTransactionOptions {
+  /** How long the transaction may run before the client rolls it back. Prisma's default is 5 s. */
+  readonly timeoutMs?: number;
+  /** How long it may wait for a connection to start on. Prisma's default is 2 s. */
+  readonly maxWaitMs?: number;
+}
+
 /** What one admin method's handler is made from. */
 export interface AdminContext {
   /** What the contract half made the method for: its filter and sort fields. */
@@ -108,6 +120,8 @@ export interface AdminContext {
   readonly onWrite: AdminOnWrite | undefined;
   /** The app's hook once each write committed, if it gave one. */
   readonly onCommitted: AdminOnCommitted | undefined;
+  /** The time limits of the hooks' transaction, if the app gave any. */
+  readonly transaction: AdminTransactionOptions | undefined;
 }
 
 /**
@@ -281,6 +295,26 @@ export interface AdminHandlersOptions<C extends AnyContract, A, Db = unknown> {
    * },
    */
   readonly onCommitted?: AdminOnCommitted<EntityOf<C>>;
+  /**
+   * The time limits of the transaction the kit writes in with `prepare`,
+   * `onWrite` or `onCommitted`, in milliseconds: `timeoutMs`, how long it
+   * may run before the database client rolls it back and fails the call
+   * (Prisma's default is 5 s), and `maxWaitMs`, how long it may wait for a
+   * connection to start on (Prisma's default is 2 s). Raise `timeoutMs` for
+   * a large cascade written in `prepare`, such as a user's delete clearing
+   * their rows in every service. Each is a positive number of milliseconds
+   * a timer honors; without a hook the kit opens no transaction, so the
+   * option is refused there. The call's own time limit still applies, from
+   * the call's start: raise `limits.callTimeoutMs` above the transaction's
+   * `timeoutMs` plus `maxWaitMs`, or the caller gets `TIMEOUT` for a write
+   * that commits. A method's own `timeoutMs` (on its kit entry) raises it
+   * for in-process, HTTP and MCP callers only: a socket client waits
+   * `limits.callTimeoutMs` plus 2 s, or its connection's `timeoutMs`.
+   *
+   * @example
+   * transaction: { timeoutMs: 30_000 },
+   */
+  readonly transaction?: AdminTransactionOptions;
 }
 
 type FormOf<A, M> = M extends keyof A

@@ -83,6 +83,16 @@ export const taskService = qd.defineService(task, {
   quickdraw-access.md), `timeoutMs`, and for queries `share` (`"caller"` or
   `"all"`), `ttlMs` and `version`. A service takes `kinds` too: the kinds of
   principal its methods and subscriptions admit.
+- `timeoutMs` (else `limits.callTimeoutMs`, 30 s) is how long the caller
+  waits: at the limit it gets `TIMEOUT` and `ctx.signal` aborts, but the
+  handler runs on, and what it writes still commits. A handler that waits on
+  a slow outside API passes it `ctx.signal` and calls
+  `ctx.signal.throwIfAborted()` before it writes the outcome, and its
+  method's `timeoutMs` sits above the API's slowest answer. The server warns
+  (category `quickdraw.call`) when a call that answered `TIMEOUT` goes on to
+  commit writes. A nested `ctx.services` call's writes flush with its
+  caller's run, so the warning fires only when that outermost call answered
+  `TIMEOUT`.
 - `share: "all"` runs one handler for every caller, with the first caller's
   `ctx`, and gives every caller its result: use it only for a result that
   depends on the input alone. Its handler reads nothing of the caller
@@ -159,7 +169,12 @@ once:
 - `requireSession(keys)` guards the app's own REST routes.
 - `bearerAuth(...)` is for a hook handed a bearer token alone: the MCP
   bridge's `principal`, an `authenticate` that reads `auth.token`.
-- An app's own MCP transport, or an in-process assistant, that signs the
+- MCP clients connect to `createMcpHttpRouter`'s path itself (`POST /mcp`,
+  MCP's Streamable HTTP transport: `claude mcp add --transport http`), each
+  call as the bearer token's principal through the registry's `principal`
+  hook, behind the router's `allowedOrigins`: never write an MCP transport
+  of your own for agents that bring a token.
+- An app's own MCP route, or an in-process assistant, that signs the
   caller in itself (with `requireSession`, say) passes that caller to the
   registry: `registry.callMethod(service, method, input, { request, principal })`.
   The registry's `principal` hook is not asked (`null` calls anonymously),
@@ -173,11 +188,26 @@ once:
 allowedOrigins)`, and checks it with `liveSession`; `auth.token` holds
   only a bearer token for it.
 - `authenticate` refuses credentials only by throwing
-  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`). Anything else it
-  or `loadServiceAccess` throws is an outage (the store or the database
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`), and lets an
+  anonymous caller in by returning `null`. Anything else it or
+  `loadServiceAccess` throws is an outage (the store or the database
   down): a socket's handshake is refused `INTERNAL`, and the client keeps
-  the user and connects again by itself. Never throw a plain `Error` for
-  bad credentials, which the client would retry for ever.
+  the user and connects again by itself, and an HTTP call is answered
+  `INTERNAL` (500). Never throw a plain `Error` for bad credentials, which
+  the client would retry for ever: the server warns
+  `[quickdraw:authenticate-threw]` in development, and lint's
+  `no-plain-error-refusal` reports one thrown in an `authenticate` (or
+  `socketAuth`'s `loadPrincipal`, which refuses by returning `null`)
+  written where the server is made.
+- The MCP registry's `principal` hook refuses a token the same way: a
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`) fails the call
+  `UNAUTHENTICATED` (401 over HTTP), and anything else it throws is an
+  outage, answered `INTERNAL` (500), never a refused token. `bearerAuth`
+  refuses that way. Never throw a plain `Error` there for a bad token, which
+  the agent would get as `INTERNAL`: the registry warns
+  `[quickdraw:mcp-principal-threw]` in development, and
+  `no-plain-error-refusal` reports one thrown in a hook written where the
+  registry is made.
 
 ## Writes are tracked; frames are derived
 
@@ -196,7 +226,11 @@ writes made through `db`, after the response is sent:
   the untracked client is none, so passing it is a type error. Both types
   are on `@fitzzero/quickdraw-core/prisma` and the root export. Never type
   such a parameter `PrismaClient`, which the untracked client is too;
-  `no-untracked-write` reads the type, whatever the parameter's name. A
+  `no-untracked-write` reads the type, whatever the parameter's name, on a
+  destructured binding (`{ db }: { db: Tracked<PrismaClient> }`) and a
+  class member (`private readonly prisma: Tracked<PrismaClient>`) as well.
+  Import the type from quickdraw itself: lint does not read an alias of
+  your own, nor a re-export from your own module. A
   `db` declared `PrismaClient` (a lazy `Proxy`, say) carries no mark:
   declare it `Tracked<PrismaClient>` to pass it to such a helper.
 - Background work a handler starts and does not await (a push sent after
@@ -209,6 +243,18 @@ writes made through `db`, after the response is sent:
 - Nested writes (`data: { labels: { create: [...] } }`) are not tracked:
   write each model through its own delegate, inside an interactive
   `db.$transaction(async (tx) => ...)` when they must commit together.
+- Inside `db.$transaction(async (tx) => ...)`, write through `tx`, and
+  nest through `tx.$transaction(async (inner) => ...)`: a savepoint, whose
+  writes are sent only if it and the transaction around it commit (a
+  rolled-back savepoint's are dropped, even when the outer one catches and
+  commits). Work on `db` there (a write, or a `db.$transaction` of its own)
+  runs outside the transaction and commits on its own, and its frames are
+  sent whatever the transaction does: write through `tx` what must commit
+  or roll back with it. `tx` writes to its own transaction wherever it is
+  used, and is refused once that transaction ended; never keep it past its
+  callback. On PGlite, with one connection, work on `db` inside a callback
+  waits for the transaction to end. A `ctx.touch` in the callback joins the
+  transaction: touch a root `db.$executeRaw` after the callback.
 - Raw SQL writes and database cascades are not seen: record them with
   `ctx.touch("task", ids)` (`{ removed: true }` for deleted rows); `qd.run`
   passes `fn` the same `touch`. Before deleting a row whose dependents the
@@ -291,7 +337,17 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   needs the caller's row level on it, as in the read/write kit), so it
   need not be an editable field of the entity; and before an `adminDelete`
   it deletes or clears through `db` the rows the database would cascade,
-  so their subscribers and lists are told.
+  so their subscribers and lists are told. A cascade too large for
+  Prisma's five-second transaction (a user's delete clearing their rows in
+  every service) gets `transaction: { timeoutMs }` beside `prepare`, never
+  a hand-written delete method. The call's own time limit still applies,
+  from the call's start: raise `limits.callTimeoutMs` above the
+  transaction's `timeoutMs` plus `maxWaitMs`, or the caller gets `TIMEOUT`
+  for a write that commits. A method's own `timeoutMs` (on its kit entry)
+  raises it for in-process, HTTP and MCP callers only: a socket client
+  waits `limits.callTimeoutMs` plus 2 s, or its connection's `timeoutMs`.
+  The statements of `prepare` and `onWrite` get the development checks a
+  handler's do.
 
 ## Realtime
 
@@ -304,7 +360,11 @@ Contract halves come from `@fitzzero/quickdraw-core`, handlers from
   items are deltas (a game's ticks), give the service a computed seed,
   `streams: { world: { seed: (worldId, ctx) => [snapshotOf(worldId)] } }`,
   never a bootstrap call beside the stream; `validate: "development"` there
-  skips the per-item schema check in production for a hot stream. A feed
+  skips the per-item schema check in production for a hot stream. A
+  `volatile: true` stream drops an item for a socket only while 64 wait on
+  its connection: of a burst, a socket on a free connection gets 65 (one
+  goes at once) and the rest are dropped until the connection sends what
+  waits, so push one snapshot instead of a bigger burst. A feed
   only a room's sockets may read takes `access: { room }`, never an entry
   policy that repeats the room's membership: a scoped stream computes the
   room from its scope, ``{ room: (worldId) => `world:${worldId}` }``, and

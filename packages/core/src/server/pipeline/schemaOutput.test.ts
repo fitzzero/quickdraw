@@ -222,7 +222,7 @@ describe("key paths", () => {
 });
 
 describe("cost", () => {
-  it("reduces a page of rows in about the time JSON.stringify takes to write it", () => {
+  it("reduces a page in time linear in its rows, with no cost per call, within ten times JSON.stringify's", () => {
     const item = z.object({
       id: z.string(),
       title: z.string(),
@@ -232,45 +232,73 @@ describe("cost", () => {
       labels: z.array(z.object({ id: z.string(), name: z.string() })),
     });
     const output = compiled(z.object({ items: z.array(item), nextCursor: z.string().nullable() }));
-    const rows = Array.from({ length: 200 }, (_, index) => ({
-      id: `task-${index}`,
-      title: `Task number ${index}`,
-      status: index % 2 === 0 ? "open" : "done",
-      ordinal: index,
-      assigneeId: null,
-      labels: [{ id: `l${index}`, name: "bug" }],
-    }));
-    const exact = { items: rows, nextCursor: "c" };
-    const wide = {
-      items: rows.map((r) => ({ ...r, notes: "secret", createdAt: "2026-01-01T00:00:00.000Z" })),
+    /** A page of `length` rows exactly as the schema declares them. */
+    const exact = (length: number) => ({
+      items: Array.from({ length }, (_, index) => ({
+        id: `task-${index}`,
+        title: `Task number ${index}`,
+        status: index % 2 === 0 ? "open" : "done",
+        ordinal: index,
+        assigneeId: null,
+        labels: [{ id: `l${index}`, name: "bug" }],
+      })),
       nextCursor: "c",
+    });
+    /** The page with two undeclared keys per row, which the reduction drops (a copy per row). */
+    const wide = (length: number) => {
+      const page = exact(length);
+      const items = page.items.map((r) => ({ ...r, notes: "secret", createdAt: "2026-01-01" }));
+      return { ...page, items };
     };
-    // The fastest of five batches, after a warm-up: what the code costs, not what the machine did meanwhile.
-    const time = (fn: () => unknown): number => {
+    const [e10, e100, e400, w100, w400] = [exact(10), exact(100), exact(400), wide(100), wide(400)];
+    const cases = {
+      e10: () => output.pick(e10),
+      e100: () => output.pick(e100),
+      e400: () => output.pick(e400),
+      w100: () => output.pick(w100),
+      w400: () => output.pick(w400),
+      stringify: () => JSON.stringify(e400),
+    };
+    type Case = keyof typeof cases;
+    // Each case's fastest batch after a warm-up, the batches taken in turns: what the code costs,
+    // not what the machine did meanwhile, and load that comes and goes reaches every case alike.
+    const runs = Object.entries(cases) as [Case, () => unknown][];
+    for (const [, fn] of runs) {
       for (let round = 0; round < 300; round += 1) {
         fn();
       }
-      let best = Number.POSITIVE_INFINITY;
-      for (let batch = 0; batch < 5; batch += 1) {
+    }
+    const ms = Object.fromEntries(runs.map(([name]) => [name, Number.POSITIVE_INFINITY])) as Record<
+      Case,
+      number
+    >;
+    for (let batch = 0; batch < 10; batch += 1) {
+      for (const [name, fn] of runs) {
         const start = performance.now();
-        for (let round = 0; round < 100; round += 1) {
+        for (let round = 0; round < 50; round += 1) {
           fn();
         }
-        best = Math.min(best, (performance.now() - start) / 100);
+        ms[name] = Math.min(ms[name], (performance.now() - start) / 50);
       }
-      return best;
-    };
-    const exactMs = time(() => output.pick(exact));
-    const wideMs = time(() => output.pick(wide));
-    const stringifyMs = time(() => JSON.stringify(exact));
+    }
+    const us = (name: Case): string => `${(ms[name] * 1000).toFixed(1)} µs`;
     // eslint-disable-next-line no-console
     console.info(
-      `schema output reduction, 200 rows of 6 keys: ${(exactMs * 1000).toFixed(1)} µs exact, ` +
-        `${(wideMs * 1000).toFixed(1)} µs with 2 keys dropped per row; JSON.stringify ${(stringifyMs * 1000).toFixed(1)} µs`,
+      `schema output reduction of rows of 6 keys: ${us("e10")}, ${us("e100")}, ${us("e400")} for 10, 100, 400 rows; ` +
+        `${us("w100")}, ${us("w400")} for 100, 400 with 2 keys dropped per row; JSON.stringify of 400 ${us("stringify")}`,
     );
-    expect(output.pick(exact)).toBe(exact);
-    // Bounds loose enough for any machine; a schema read per call would cost a hundred times more.
-    expect(exactMs).toBeLessThan(stringifyMs * 2);
-    expect(wideMs).toBeLessThan(stringifyMs * 4);
+    expect(output.pick(e400)).toBe(e400);
+    // Linear in the rows: four times the rows cost about four times as much (a walk over the rows
+    // for each row would cost sixteen), whether the reduction copies nothing or a row each.
+    expect(ms.e400 / ms.e100).toBeLessThan(8);
+    expect(ms.w400 / ms.w100).toBeLessThan(8);
+    // No cost per call the page does not grow: forty times the rows cost over ten times as much
+    // (a schema read on every call costs as much as a couple of hundred rows: about three).
+    expect(ms.e400 / ms.e10).toBeGreaterThan(10);
+    // Within an order of magnitude of writing the page. The walk is JS and JSON.stringify native,
+    // so their ratio is the machine's own (0.6 to 0.9 here, 2.8 on a CI runner): the tight checks
+    // are the reduction's ratios to itself, above.
+    expect(ms.e400).toBeLessThan(ms.stringify * 10);
+    expect(ms.w400).toBeLessThan(ms.stringify * 20);
   });
 });

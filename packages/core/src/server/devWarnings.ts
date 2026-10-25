@@ -40,16 +40,24 @@
 // | requires`            | `access`, so every signed-in user may send it                      |                          |
 // |                      | (`realtime/channelWarnings.ts`); raised when a dispatcher is made, |                          |
 // |                      | so a strict test app fails to start                                 |                          |
+// | `authenticate-threw` | the server's `authenticate` threw anything but a `QuickdrawError`, | none (once per server)   |
+// |                      | which both transports take for the server's failure (`INTERNAL`),  |                          |
+// |                      | so a refusal made that way never signs a client out                |                          |
+// |                      | (`transports/auth.ts`); outside any call, so never strict           |                          |
+// | `mcp-principal-      | an MCP registry's `principal` hook threw anything but a            | none (once per registry) |
+// | threw`               | `QuickdrawError`, which the bridge answers `INTERNAL`, so an agent |                          |
+// |                      | whose token it refused that way is told the server failed          |                          |
+// |                      | (`mcp/session.ts`); outside any call, so never strict               |                          |
 //
 // `nested-write`, `ambient-write`, `batch-read` and `batch-create-many` are
 // the write tracker's (`uow/unitOfWork.ts`), raised exactly where they were
 // before; they gained the format and the call. Only an app's
 // own statements are checked for the first two: the framework's reads through
 // the storage adapter, the tracker's own reads and the kits' handlers run
-// `quietly`, while the app's callbacks a kit calls (`prepare`, `onChange`,
-// `resolveUser`, a search strategy) run `checked`. A query by an `id` list
-// (`{ id: { in: ids } }`) is one query per list, not per row, so it never
-// counts toward an N+1. Warnings are off when NODE_ENV is "production". In a test app
+// `quietly`, while the app's callbacks a kit calls (`prepare`, `onWrite`,
+// `onChange`, `resolveUser`, a search strategy) run `checked`. A query by an
+// `id` list (`{ id: { in: ids } }`) is one query per list, not per row, so it
+// never counts toward an N+1. Warnings are off when NODE_ENV is "production". In a test app
 // made with `strictWarnings` (under vitest or jest) every warning raised in
 // one of its method calls throws a `DevWarningError` where it is raised
 // instead, so the test fails; warnings outside its calls (an ambient write
@@ -74,7 +82,9 @@ export type DevWarningKind =
   | "resolver-without-reads"
   | "untracked-access-model"
   | "shared-principal"
-  | "channel-without-requires";
+  | "channel-without-requires"
+  | "authenticate-threw"
+  | "mcp-principal-threw";
 
 /** One development warning. */
 export interface DevWarning {
@@ -201,8 +211,8 @@ export async function quietly<T>(fn: () => T | PromiseLike<T>): Promise<T> {
 /**
  * Runs `fn` with the development checks of statements on again, inside a
  * kit's quiet handler: the app's own callbacks a kit calls (`prepare`,
- * `onChange`, `resolveUser`, a search strategy) are the app's code, checked
- * like a handler's.
+ * `onWrite`, `onChange`, `resolveUser`, a search strategy) are the app's
+ * code, checked like a handler's.
  */
 export async function checked<T>(fn: () => T | PromiseLike<T>): Promise<T> {
   return await QUIET.run(false, async () => await fn());

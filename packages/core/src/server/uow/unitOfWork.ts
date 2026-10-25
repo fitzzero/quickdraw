@@ -11,6 +11,20 @@
 //   enclosing buffer only when the transaction commits; a rollback discards
 //   them; an interactive transaction's frame also holds its transaction
 //   client, so the adapter's own reads see the transaction's writes;
+// - a transaction begun on the root client (`openTransaction`) commits on
+//   its own, wherever it is begun: inside another transaction's callback it
+//   runs on a connection of its own. Its writes skip every transaction
+//   frame for the nearest unit's buffer when it commits, as the root
+//   client's own writes do, which are durable at once (`record` with
+//   origin `"root"`), unless an array-form batch runs them as its own;
+// - a transaction's client records its writes into that transaction's
+//   frame (`TrackedTransaction.record`), whichever frame is active where
+//   they run: the adapter knows which transaction a client belongs to, so
+//   an outer transaction's client used inside another transaction's
+//   callback, or in an array-form batch, writes to the outer one. A
+//   transaction nested in another (a savepoint, `nest`) has a frame of its
+//   own, whose writes join the other's when it commits, and are discarded
+//   when it rolls back while the other goes on;
 // - a unit begun inside another open frame (an in-process call made from a
 //   handler, `qd.run` inside a transaction) joins it: its writes go where
 //   the enclosing frame's go, and its own flush does nothing; a detached
@@ -80,17 +94,38 @@ interface Frame {
 /** A warning the tracker raises; it adds the call it was raised in. */
 export type TrackerWarning = Omit<DevWarning, "service" | "method">;
 
-/** An open transaction, from {@link WriteTracker.openTransaction}. */
+/** An open transaction, from {@link WriteTracker.openTransaction} or {@link TrackedTransaction.nest}. */
 export interface TrackedTransaction {
   /** Sets the interactive transaction's client, once the database has opened it. */
   setClient(tx: unknown): void;
+  /** The client `setClient` set, if any. */
+  readonly client: unknown;
   /** Runs `fn` inside the transaction's frame, awaiting its result there. */
   run<T>(fn: () => T | PromiseLike<T>): Promise<T>;
+  /**
+   * Records writes its client made, into its frame, whichever frame is
+   * active where they ran. Writes recorded once it settled go where its
+   * writes went when it committed, and nowhere when it rolled back.
+   */
+  record(writes: readonly WriteRecord[]): void;
+  /**
+   * Opens an interactive transaction nested in this one (a savepoint),
+   * whose writes join this one's when it commits.
+   */
+  nest(): TrackedTransaction;
   /** The transaction committed: its writes join the enclosing buffer. */
   commit(): void;
   /** The transaction rolled back: its writes are dropped. */
   rollback(): void;
 }
+
+/**
+ * Which client work the adapter reports came from ({@link WriteTracker.record},
+ * `observe`): the root client, whose work runs outside every interactive
+ * transaction even inside one's callback, on a connection of its own, or a
+ * transaction's client, whose work runs in that transaction.
+ */
+export type WorkOrigin = "root" | "transaction";
 
 /** A statement count, from {@link WriteTracker.countStatements}. */
 export interface StatementCount<T> {
@@ -117,13 +152,22 @@ export interface WriteTrackerOptions {
 export interface WriteTracker {
   /** The units of work of handler runs and `qd.run` blocks: give it to the dispatcher. */
   readonly unitOfWork: UnitOfWorkFactory;
-  /** Records writes where they ran: an open transaction, a unit of work, or the next tick's ambient flush. */
-  record(writes: readonly WriteRecord[]): void;
+  /**
+   * Records writes where they ran: an open transaction, a unit of work, or
+   * the next tick's ambient flush. The root client's (`"root"`) go past
+   * every open transaction to the nearest unit's buffer, unless the
+   * innermost open buffer is an array-form batch's, which runs them.
+   */
+  record(writes: readonly WriteRecord[], origin?: "root"): void;
   /** Records `ids` of `model` as changed, or as deleted with `removed`: `ctx.touch`. */
   touch(model: string, ids: readonly string[], options?: TouchOptions): void;
   /** Counts one statement in every open frame where it runs. */
   countStatement(): void;
-  /** Opens a transaction frame inside the active one. */
+  /**
+   * Opens a transaction begun on the root client, in a frame inside the
+   * active one: it commits on its own, so its writes skip every open
+   * transaction frame when it commits. A savepoint is `nest`ed instead.
+   */
   openTransaction(kind: "interactive" | "batch"): TrackedTransaction;
   /** The client of the open interactive transaction where this runs, or `undefined`. */
   transactionClient(): unknown;
@@ -142,9 +186,11 @@ export interface WriteTracker {
   /**
    * Hands a statement the database client is about to run to the checks of
    * the method call it runs in (development only; nothing outside a call,
-   * nor inside `quietly`).
+   * nor inside `quietly`), where its `origin` runs it: a transaction
+   * client's in its interactive transaction, the root client's outside
+   * every one (in the array-form batch running it, if any).
    */
-  observe(statement: Statement): void;
+  observe(statement: Statement, origin?: WorkOrigin): void;
   /** The logger warnings go to: the attached dispatcher's, or the one given at creation. */
   readonly logger: Logger;
 }
@@ -206,21 +252,34 @@ function warn(state: TrackerState, warning: TrackerWarning): void {
   (frame.warnings ?? state.warnings).warn({ ...warning, ...frame.call });
 }
 
-/** Where a statement runs: the innermost open buffer is a unit's, a batch's or an interactive transaction's. */
-function placeOf(state: TrackerState): StatementPlace {
+/** True inside an array-form transaction: the innermost open buffer is a batch's. */
+function inBatch(state: TrackerState): boolean {
+  return frameWhere(state, (frame) => frame.buffer !== undefined)?.batch === true;
+}
+
+/**
+ * Where a statement runs: a transaction client's in its interactive
+ * transaction; else the innermost open buffer is a unit's, a batch's or an
+ * interactive transaction's, and outside the open transactions for the root
+ * client's, unless a batch runs it.
+ */
+function placeOf(state: TrackerState, origin: WorkOrigin | undefined): StatementPlace {
+  if (origin === "transaction") {
+    return "interactive";
+  }
   const open = frameWhere(state, (candidate) => candidate.buffer !== undefined);
   if (open?.batch === true) {
     return "batch";
   }
-  return open?.tx === undefined ? "unit" : "interactive";
+  return open?.tx === undefined || origin === "root" ? "unit" : "interactive";
 }
 
-function observe(state: TrackerState, statement: Statement): void {
+function observe(state: TrackerState, statement: Statement, origin: WorkOrigin | undefined): void {
   if (!state.development || isQuiet()) {
     return;
   }
   const frame = frameWhere(state, (candidate) => candidate.check !== undefined);
-  frame?.check?.(statement, placeOf(state));
+  frame?.check?.(statement, placeOf(state, origin));
 }
 
 function notify(state: TrackerState, writes: readonly WriteRecord[]): void {
@@ -342,17 +401,22 @@ async function runLoose<T>(fn: () => T | PromiseLike<T>): Promise<T> {
   }
 }
 
-/** Puts `writes` in the first open buffer at or above `from`, or flushes them on their own. */
+/**
+ * Puts `writes` in the first open buffer at or above `from` (a durable one,
+ * a unit's, when they ran outside every transaction), or flushes them on
+ * their own.
+ */
 function deliver(
   state: TrackerState,
   writes: readonly WriteRecord[],
   from: Frame | undefined,
+  outsideTransactions = false,
 ): void {
   if (writes.length === 0) {
     return;
   }
   for (let frame = from; frame !== undefined; frame = frame.parent) {
-    if (frame.open && frame.buffer !== undefined) {
+    if (frame.open && frame.buffer !== undefined && (frame.durable || !outsideTransactions)) {
       frame.buffer.push(...writes);
       if (frame.durable) {
         notify(state, writes);
@@ -365,10 +429,17 @@ function deliver(
   }
 }
 
-function openTransaction(state: TrackerState, kind: "interactive" | "batch"): TrackedTransaction {
-  const parent = state.als.getStore();
+/**
+ * A transaction's frame, inside the active one. `settle` takes its writes
+ * when it commits, and any its client records after that.
+ */
+function openFrame(
+  state: TrackerState,
+  kind: "interactive" | "batch",
+  settle: (writes: readonly WriteRecord[]) => void,
+): TrackedTransaction {
   const frame: Frame = {
-    parent,
+    parent: state.als.getStore(),
     buffer: [],
     durable: false,
     tx: undefined,
@@ -379,19 +450,40 @@ function openTransaction(state: TrackerState, kind: "interactive" | "batch"): Tr
     check: undefined,
     open: true,
   };
-  return {
+  let committed = false;
+  const transaction: TrackedTransaction = {
     setClient: (tx) => {
       frame.tx = tx;
     },
+    get client() {
+      return frame.tx;
+    },
     run: (fn) => state.als.run(frame, async () => await fn()),
+    record: (writes) => {
+      if (frame.open) {
+        frame.buffer?.push(...writes);
+      } else if (committed) {
+        settle(writes);
+      }
+    },
+    // A savepoint: its writes join this transaction's when it commits.
+    nest: () => openFrame(state, "interactive", (writes) => transaction.record(writes)),
     commit: () => {
       frame.open = false;
-      deliver(state, frame.buffer ?? [], parent);
+      committed = true;
+      settle(frame.buffer ?? []);
     },
     rollback: () => {
       frame.open = false;
     },
   };
+  return transaction;
+}
+
+/** A transaction begun on the root client: it commits on its own, wherever it was begun. */
+function openTransaction(state: TrackerState, kind: "interactive" | "batch"): TrackedTransaction {
+  const parent = state.als.getStore();
+  return openFrame(state, kind, (writes) => deliver(state, writes, parent, true));
 }
 
 async function countStatements<T>(
@@ -455,6 +547,9 @@ function createUnit(state: TrackerState, scope: UnitOfWorkScope): UnitOfWork {
   return {
     get sqlStatements() {
       return statements;
+    },
+    get recorded() {
+      return writes.length;
     },
     run<T>(fn: () => T | PromiseLike<T>): Promise<T> {
       // Inside an open buffer (a transaction, another unit), this unit joins it, unless it is
@@ -569,7 +664,8 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
   ISSUED.set(unitOfWork, () => state.issued);
   return Object.freeze({
     unitOfWork,
-    record: (writes: readonly WriteRecord[]) => deliver(state, writes, state.als.getStore()),
+    record: (writes: readonly WriteRecord[], origin?: "root") =>
+      deliver(state, writes, state.als.getStore(), origin === "root" && !inBatch(state)),
     touch,
     countStatement(): void {
       state.issued += 1;
@@ -581,7 +677,7 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
     },
     openTransaction: (kind: "interactive" | "batch") => openTransaction(state, kind),
     transactionClient: () => frameWhere(state, (frame) => frame.tx !== undefined)?.tx,
-    inBatch: () => frameWhere(state, (frame) => frame.buffer !== undefined)?.batch === true,
+    inBatch: () => inBatch(state),
     countStatements: <T>(fn: () => T | PromiseLike<T>) => countStatements(state, fn),
     onWrite(listener: (write: WriteRecord) => void): () => void {
       state.listeners.add(listener);
@@ -590,7 +686,7 @@ export function createWriteTracker(options: WriteTrackerOptions = {}): WriteTrac
       };
     },
     warn: (warning: TrackerWarning) => warn(state, warning),
-    observe: (statement: Statement) => observe(state, statement),
+    observe: (statement: Statement, origin?: WorkOrigin) => observe(state, statement, origin),
     get logger() {
       return state.logger;
     },

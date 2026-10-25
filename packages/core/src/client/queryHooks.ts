@@ -137,8 +137,8 @@ export async function readAfterJoin(
  * starts while the join is in flight waits for it (`readAfterJoin`). When
  * the server acknowledges the join after a read of the query was sent
  * instead (on a socket that was not connected yet, a result prefetched
- * before the watch, or a read that waited in the send buffer through an
- * outage and went out before the topic was joined again), a change made
+ * before the watch, or a read held through an outage that went out at the
+ * new socket's hello, before the topic was joined again), a change made
  * between that read and the join sent no `qd:changed` here, so the query is
  * invalidated once (RFC 0003 section 17).
  */
@@ -219,16 +219,26 @@ type PlaceholderFunction = (previousData: unknown, previousQuery: Query | undefi
 
 /**
  * `placeholderData` made to take a placeholder only from a query the cache
- * still holds. TanStack asks a placeholder function about the last query
- * that held data, which the observer keeps outside the cache: after another
- * user's hello, or the end of the session, emptied the cache
- * (`./session.ts`), that query and its data are the last user's, and give
- * no placeholder. A new function on each call: TanStack shows the
- * placeholder it last made again, without asking, while the option stays
- * the same function, which would keep one whose query left the cache. A
- * value passes as it is: it is the app's own, never a result that was read.
+ * still holds, so never from a result another user's session left: for a
+ * TanStack hook an app writes over a member's `key(...)` and `call(...)`
+ * (`useInfiniteQuery`, `useQueries`), which a member's own `useQuery` and
+ * `useSearch` do not cover. Call it on every render, in the component:
+ *
+ * ```ts
+ * const queryClient = useQueryClient();
+ * useInfiniteQuery({ ...pages, placeholderData: placeholderFromSession(queryClient, keepPreviousData) });
+ * ```
+ *
+ * TanStack asks a placeholder function about the last query that held data,
+ * which the observer keeps outside the cache: after another user's hello, or
+ * the end of the session, emptied the cache (`./session.ts`), that query and
+ * its data are the last user's, and give no placeholder. A new function on
+ * each call: TanStack shows the placeholder it last made again, without
+ * asking, while the option stays the same function, which would keep one
+ * whose query left the cache. A value passes as it is: it is the app's own,
+ * never a result that was read.
  */
-function placeholderFromCache<Placeholder>(
+export function placeholderFromSession<Placeholder>(
   queryClient: QueryClient,
   placeholderData: Placeholder,
 ): Placeholder {
@@ -250,7 +260,7 @@ function placeholderFromCache<Placeholder>(
  * caller's, or else what TanStack would take from `queryClient`'s defaults
  * for `queryKey` (an app's own `QueryClient` may give every query
  * `keepPreviousData`), taking a placeholder only from a query the cache
- * still holds (`placeholderFromCache`).
+ * still holds (`placeholderFromSession`).
  */
 export function placeholderOption<Placeholder>(
   queryClient: QueryClient,
@@ -264,7 +274,7 @@ export function placeholderOption<Placeholder>(
       : ((Object.hasOwn(keyDefaults, "placeholderData")
           ? keyDefaults.placeholderData
           : queryClient.getDefaultOptions().queries?.placeholderData) as Placeholder | undefined);
-  return placeholderFromCache(queryClient, given);
+  return placeholderFromSession(queryClient, given);
 }
 
 /**

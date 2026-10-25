@@ -197,6 +197,8 @@ export interface Additions {
   refused(service: string, collection: string, scope: string): readonly RefusedAddition[];
   /** Every addition, oldest scope first. */
   all(): Addition[];
+  /** How many times `clear` emptied them: an addition held before then is gone for good. */
+  readonly generation: number;
   clear(): void;
 }
 
@@ -402,6 +404,7 @@ function weigh(
 export function createAdditions(queryClient: QueryClient): Additions {
   const byScope = new Map<string, Addition[]>();
   let size = 0;
+  let cleared = 0;
   /** Set when a call's outcome turned unknown: some scope may need asking (`unchecked`). */
   let toCheck = false;
   const all = (): Addition[] => [...byScope.values()].flat();
@@ -422,6 +425,9 @@ export function createAdditions(queryClient: QueryClient): Additions {
   return {
     get size() {
       return size;
+    },
+    get generation() {
+      return cleared;
     },
     add(service, collection, scope, item, keep = false) {
       const addition = newAddition(service, collection, scope, item, keep);
@@ -466,6 +472,7 @@ export function createAdditions(queryClient: QueryClient): Additions {
     clear() {
       byScope.clear();
       size = 0;
+      cleared += 1;
     },
   };
 }

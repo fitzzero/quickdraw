@@ -632,6 +632,17 @@ export const taskService = qd.defineService(task, {
   with transport `"internal"`, so tell a token's call apart by `ctx.mcp`,
   never by `ctx.transport`. It is typed by the `contracts` of
   `initQuickdraw`'s types, as `qd.caller` is.
+- `timeoutMs` is how long the caller waits (else the dispatcher's
+  `limits.callTimeoutMs`, 30 s). At the limit the caller gets `TIMEOUT` and
+  `ctx.signal` aborts, but a handler still running runs on, and what it
+  writes still commits and is pushed: `TIMEOUT` says the server stopped
+  waiting, not that nothing happened. A method that waits on a slow outside
+  API passes it `ctx.signal`, calls `ctx.signal.throwIfAborted()` before it
+  writes the outcome, and sets `timeoutMs` above its slowest path. The
+  server logs a warning (category `quickdraw.call`) when a call that
+  answered `TIMEOUT` goes on to commit writes. A nested `ctx.services`
+  call's writes flush with its caller's run, so the warning fires only when
+  that outermost call answered `TIMEOUT`.
 - `share: "caller"` runs identical concurrent calls of one principal once,
   `share: "all"` across principals; `ttlMs` keeps a shared result. A
   `"all"` run's handler sees the first caller's `ctx` and every caller gets
@@ -654,7 +665,8 @@ export const taskService = qd.defineService(task, {
   under a time limit (30 s by default), the result shaped to its output
   (below), output validation outside production, the reply, the flush, and
   one completion record (`onCall`). A mutation ignores the caller's cancel:
-  only its time limit stops it.
+  only its time limit ends the call early, and its handler runs on even then
+  (`timeoutMs`, above).
 - A method's output is sent as it declares it, on every transport and in
   production too, so a handler may return the whole row: a projection
   output (`"entity"`, a named projection) sends the projection's keys,
@@ -672,17 +684,17 @@ throws reaches the caller as `INTERNAL` with a generic message, and is
 logged; Prisma's unique violation becomes `CONFLICT` and its missing row
 `NOT_FOUND`.
 
-| Code              | HTTP | Meaning                                            |
-| ----------------- | ---- | -------------------------------------------------- |
-| `UNAUTHENTICATED` | 401  | no principal                                       |
-| `FORBIDDEN`       | 403  | access denied                                      |
-| `NOT_FOUND`       | 404  | unknown service, method or row                     |
-| `CONFLICT`        | 409  | unique or state conflict                           |
-| `VALIDATION`      | 422  | input failed its schema; `data.issues` lists paths |
-| `RATE_LIMITED`    | 429  | limiter or queue overflow; `data.retryAfterMs`     |
-| `CANCELLED`       | 499  | the caller cancelled                               |
-| `TIMEOUT`         | 504  | the handler ran past its time limit                |
-| `INTERNAL`        | 500  | everything else                                    |
+| Code              | HTTP | Meaning                                                  |
+| ----------------- | ---- | -------------------------------------------------------- |
+| `UNAUTHENTICATED` | 401  | no principal                                             |
+| `FORBIDDEN`       | 403  | access denied                                            |
+| `NOT_FOUND`       | 404  | unknown service, method or row                           |
+| `CONFLICT`        | 409  | unique or state conflict                                 |
+| `VALIDATION`      | 422  | input failed its schema; `data.issues` lists paths       |
+| `RATE_LIMITED`    | 429  | limiter or queue overflow; `data.retryAfterMs`           |
+| `CANCELLED`       | 499  | the caller cancelled                                     |
+| `TIMEOUT`         | 504  | the server stopped waiting; the handler may still commit |
+| `INTERNAL`        | 500  | everything else                                          |
 
 An app adds its own fields to every `ctx` once, through `initQuickdraw`:
 
@@ -914,8 +926,14 @@ export const taskService = qd.defineService(task, {
   none: a job asks `server.dispatcher.access`.
 - `createServer({ access: { cacheMs: 30_000 } })` keeps policy lookups across
   requests; tracked writes to the columns and membership tables the policies
-  read evict them. Writes the tracked client cannot see are picked up only
-  when the time passes, so the cache is off by default. A lookup inside a
+  read evict them as soon as the write is durable (a transaction's at its
+  commit, a rolled-back one never), so a check later in the same call sees
+  it, as does any other request on that node. Servers behind a cluster
+  adapter evict when the write's flush broadcasts its access change, after
+  the call. A process that broadcasts nothing (a job on a bare
+  `createDispatcher`, or a server without a cluster adapter) reaches other
+  processes' caches only when the time passes, as do writes the tracked
+  client cannot see, so the cache is off by default. A lookup inside a
   transaction (`db.$transaction`, a sharing change) reads the database,
   never the cache.
 
@@ -948,6 +966,25 @@ tracked client as `db`; the server finds the rest on it.
   `update` that moves a row or changes who may see it reads first, are read
   outside the batch, and rows its earlier statements changed may be missed
   (a development warning names the model and operation).
+- A transaction nested in an interactive one,
+  `tx.$transaction(async (inner) => ...)`, runs as a savepoint of it
+  (Prisma 7) and is tracked the same way: its writes join the transaction
+  around it when the savepoint is released, and are dropped when it rolls
+  back, even when the transaction around it catches the error and commits.
+  Inside a transaction's callback, write through its client (`tx`,
+  `inner`) what must commit or roll back with it. Work on `db` there runs
+  outside the transaction, on a connection of its own, and is tracked as
+  such: a write (a `createMany` or `updateMany` too) commits at once, and a
+  `db.$transaction` of its own commits on its own, so their frames are sent
+  whatever the transaction then does. (A database with one connection, as
+  PGlite in tests, runs that work only once the transaction ends.) A
+  transaction's client writes to its own transaction wherever it is used,
+  inside another transaction's callback too, and once that transaction
+  ended its writes are refused, as Prisma refuses them. An array-form
+  `$transaction([...])` begun on either client is a transaction of its
+  own, as Prisma runs it: the root client's operations in it commit with
+  it, while one made on `tx` in it runs in `tx`'s transaction (the
+  tracking hook awaits it there; Prisma alone would run it in the batch).
 - Write many rows in one statement when every row gets the same data
   (`updateMany`, `createMany`). When each row's data differs (moving tasks
   to different projects, say), write each row by id inside an interactive
@@ -991,8 +1028,9 @@ export async function markStale(before: Date): Promise<number> {
   one (`db` is one too), and the untracked client passed to it is a type
   error. A helper typed `PrismaClient` takes either client. Both types are
   type-only, on `./prisma` and on the root export, so a shared package
-  names them without Prisma. `no-untracked-write` reads the type too: a
-  parameter so typed may be named `prisma`.
+  names them without Prisma. `no-untracked-write` reads the type too, when
+  the file imports it from quickdraw (under any name): a parameter, a
+  destructured binding or a class member so typed may be named `prisma`.
 
 <!-- example: apps/api/src/jobs/overdue.ts#helper -->
 
@@ -1030,7 +1068,10 @@ export async function restoreProject(projectId: string): Promise<number> {
   statement. Before deleting a row, delete or clear through `db` the rows
   a cascade would take with it (for the admin kit's `adminDelete`, in its
   `prepare`). Record raw SQL with
-  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A job
+  `ctx.touch("task", ids)`, or `{ removed: true }` for deleted rows. A touch
+  inside a transaction's callback joins that transaction, as a write
+  through `tx` there would: touch a root `db.$executeRaw` made there after
+  the callback, or the transaction's rollback drops it. A job
   gets the same `touch` from `qd.run`, whose `fn` receives
   `{ touch, log, principal: null }`:
 
@@ -1403,12 +1444,20 @@ over three transports (design: sections 3, 8 and 10):
 `authenticate` takes one request (`{ transport, auth, headers, socket | req }`,
 plus `credential` and `sessionCookie` on HTTP) for both transports and
 returns a principal, a user id, or nothing for an anonymous caller; throwing
-`QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) refuses. Anything
-else it, or `loadServiceAccess`, throws is the server's failure (its session
-store or database down): a socket's handshake is refused `INTERNAL`, and a
-quickdraw client keeps the user and connects again by itself, while an HTTP
-call is answered `UNAUTHENTICATED`, as before. On HTTP the session cookie
-is in `auth.token` only for `socketAuth`'s `authenticate`.
+`QuickdrawError("UNAUTHENTICATED", ...)` (or `"FORBIDDEN"`) refuses: a
+socket's handshake is refused `UNAUTHENTICATED`, which signs a quickdraw
+client out, and an HTTP call is answered 401 (403 for `FORBIDDEN`).
+Anything else it, or `loadServiceAccess`, throws is the server's failure
+(its session store or database down): a socket's handshake is refused
+`INTERNAL`, and a quickdraw client keeps the user and connects again by
+itself, and an HTTP call is answered `INTERNAL` (500), which
+`createServerCaller` rejects with. So a plain `Error` thrown for bad
+credentials signs nobody out: in development the server warns once when
+`authenticate` throws anything but a `QuickdrawError`
+(`[quickdraw:authenticate-threw]`), and lint's `no-plain-error-refusal`
+reports one thrown in an `authenticate` (or `socketAuth`'s `loadPrincipal`)
+written where the server is made. On HTTP the session cookie is in
+`auth.token` only for `socketAuth`'s `authenticate`.
 Pass your own HTTP server as `httpServer` together with the `app` it was
 created from (or with `http: false`).
 
@@ -1471,10 +1520,10 @@ lane. A `principal` hook that authenticates by anything but the bearer
 token (a cookie, an API key header) must refuse a request whose bearer
 token it does not verify, or a caller makes a lane per made-up token. The
 HTTP routes have no rate limit of their own: limit them per address, as
-below (`createPublicApiLimiter` answers 429 with `{ error }`, not the
-routes' `{ success: false, code }`). A method whose input cannot describe
-itself as JSON Schema stops the registry at startup, naming the method,
-unless it is excluded.
+below (`createPublicApiLimiter` answers 429 with `{ error }`, neither a
+JSON-RPC error nor the 4.1 routes' `{ success: false, code }`). A method
+whose input cannot describe itself as JSON Schema stops the registry at
+startup, naming the method, unless it is excluded.
 
 <!-- example: apps/api/src/mcp.ts#mcp -->
 
@@ -1511,10 +1560,12 @@ const registry = createMcpRegistry({
   ],
 });
 
-// GET /mcp/tools, POST /mcp/invoke; the routes have no rate limit of their own, so limit them per
-// address (never by the bearer token, which nothing has checked yet)
+// POST /mcp is MCP's Streamable HTTP transport, for a client such as Claude Code:
+//   claude mcp add --transport http my-app https://host/mcp --header "Authorization: Bearer $TOKEN"
+// and GET /mcp/tools, POST /mcp/invoke are 4.1's routes. None has a rate limit of its own, so limit
+// them per address (never by the bearer token, which nothing has checked yet)
 app.use("/mcp", createPublicApiLimiter({ max: 600 }));
-app.use(createMcpHttpRouter({ registry }));
+app.use(createMcpHttpRouter({ registry, name: "my-app", version: "1.0.0" }));
 // in an MCP client's process
 createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
 ```
@@ -1526,15 +1577,36 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   (`server.close()` cancels them instead). Start its module through
   `bootstrapMcpServer(new URL("./mcp-server.js", import.meta.url))`, which
   sends console output to stderr so only the protocol reaches stdout.
-- **HTTP**: `GET /mcp/tools` and `POST /mcp/invoke`, which takes
-  `{ name, arguments }` and answers `{ success: true, data }`, or
-  `{ success: false, error, code, data? }` with the code's HTTP status. A
-  request from a web page (one with an `Origin` header) is answered 403
-  unless `createMcpHttpRouter({ allowedOrigins })` lists its origin (exact
-  origins or anchored patterns, as `socketAuth` takes them; none by
-  default); an MCP client sends no `Origin`. `allowedOrigins` adds no CORS
-  headers: a page on another origin still needs the app's CORS setup. For a
-  server on a developer's machine or a LAN,
+- **HTTP**: `POST /mcp` is MCP's Streamable HTTP transport (protocol
+  versions 2025-11-25, 2025-06-18 and 2025-03-26), which MCP clients such
+  as Claude Code connect to, in its stateless, JSON-only form: a POST's
+  JSON-RPC messages are answered in its response, one JSON body, and
+  `initialize` answers the client's version when it is one of the three,
+  else the latest. `initialize`, `ping`, `tools/list` and `tools/call` are
+  answered as on stdio, and each call runs as the bearer token's principal,
+  in its caller's lane. A request needs `Content-Type: application/json`
+  (415 otherwise) and an `Accept` that allows `application/json` (406),
+  and the `MCP-Protocol-Version` it names must be one of the three (400;
+  without one it is 2025-03-26). Notifications and responses alone are
+  answered 202. A batch is 2025-03-26's only, of at most 16 messages and
+  one `tools/call` (400 otherwise), so a rate limit in front of the route,
+  which counts a POST once, counts every call. The endpoint keeps no
+  session: it never sends `Mcp-Session-Id` (one a client sends is
+  ignored), and answers GET and DELETE 405 (`Allow: POST`). It serves no
+  event stream, resumability or OAuth discovery. A client cancels a call by
+  closing its request: `notifications/cancelled` names a request of an
+  earlier POST, which a stateless server cannot find, so it does nothing.
+  `createMcpHttpRouter({ name, version })` names the server in
+  `initialize` (default `"quickdraw"` and quickdraw-core's version).
+- 4.1's routes stay beside it: `GET /mcp/tools`, and `POST /mcp/invoke`,
+  which takes `{ name, arguments }` and answers `{ success: true, data }`,
+  or `{ success: false, error, code, data? }` with the code's HTTP status.
+- A request from a web page (one with an `Origin` header) is answered 403
+  on every route unless `createMcpHttpRouter({ allowedOrigins })` lists its
+  origin (exact origins or anchored patterns, as `socketAuth` takes them;
+  none by default); an MCP client sends no `Origin`. `allowedOrigins` adds
+  no CORS headers: a page on another origin still needs the app's CORS
+  setup. For a server on a developer's machine or a LAN,
   `allowedHosts: ["localhost", "127.0.0.1", "::1"]` also refuses a request
   for any other `Host`, which a DNS-rebinding page would send. An entry with
   a port matches that port only (a `Host` without one is for port 80 or
@@ -1558,9 +1630,19 @@ createMcpStdioServer({ registry, name: "my-app", version: "1.0.0" });
   `"public"` tool takes none. Custom tools served beside the services of
   apps that admit no kind in common stop the registry at startup.
 - To refuse a token, the `principal` hook throws
-  `QuickdrawError("UNAUTHENTICATED")`, which is logged at debug, as the
-  caller's doing; anything else it throws is logged as an error. Never put
-  the token in the message.
+  `QuickdrawError("UNAUTHENTICATED")` (or `"FORBIDDEN"`): the call is
+  answered `UNAUTHENTICATED` (401 over HTTP), logged at debug, as the
+  caller's doing. Never put the token in the message. Anything else it
+  throws, or a principal of the wrong shape, is the server's failure (its
+  token store or database down), as it is from `authenticate`: the call is
+  answered `INTERNAL` (500 over HTTP) and logged as an error, so an agent
+  is never told that a token the hook could not check is refused. A hook
+  that refuses with a plain `Error` therefore never tells the agent its
+  token is bad: in development the registry warns once when its hook
+  throws anything but a `QuickdrawError`
+  (`[quickdraw:mcp-principal-threw]`), and lint's `no-plain-error-refusal`
+  reports one thrown in a hook written where the registry is made.
+  `bearerAuth` refuses with a `QuickdrawError`.
 
 `bind` fills chosen arguments from who is calling instead of from the agent,
 so an agent bound to one project cannot name another in its calls. Here an
@@ -1583,7 +1665,7 @@ const projectAgents = createMcpRegistry({
   name: (_service, method) => (method === "create" ? "create_task" : "count_tasks"),
 });
 
-// beside the first registry, at a path of its own: GET /agents/tools, POST /agents/invoke
+// beside the first registry, at a path of its own: /agents, /agents/tools and /agents/invoke
 app.use(createMcpHttpRouter({ registry: projectAgents, path: "/agents" }));
 ```
 
@@ -1659,8 +1741,8 @@ app.post("/assistant/:service/:method", signedIn, (req, res) => {
   `auth.loadServiceAccess` loads, at each call, as `qd.caller` gives them;
   one that carries grants (`{}` included) keeps exactly those. The `principal`
   hook's principal is used as the hook returns it.
-- It is an in-process option: `POST /mcp/invoke` never reads a principal
-  from its body.
+- It is an in-process option: neither `POST /mcp` nor `POST /mcp/invoke`
+  reads a principal from a request's body.
 
 Two more needs are met by the options above, with nothing added:
 
@@ -1690,7 +1772,12 @@ and event, plus `useEntity` and `useEntities` for a contract with an entity
 the method's kind does not have, is a compile error.
 `<QuickdrawProvider client={qd} url auth>` owns the socket and the TanStack
 `QueryClient` (5-minute stale time by default), and works without DOM
-globals (React Native).
+globals (React Native). Its `socketOptions` pass through to Socket.IO's
+`io()`, but `retries`, which it refuses with a `TypeError`: Socket.IO would
+send an unanswered call again on the next connect, before that socket's
+hello says whom it speaks for, and after a timeout, while the server may
+still be running it. quickdraw retries only the calls that are safe to
+retry: a query hook's read, once, after `INTERNAL` (`shouldRetry`).
 
 | Member                                                                    | Gives                                                                                           |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -1757,6 +1844,62 @@ export function TaskDetail({ id }: { readonly id: string }) {
   `optimistic: (input, cache) => ...` writes its own layers with
   `patchEntity`, `removeEntity` and `patchItem`, and adds rows with
   `addItem` and `addEntity` (below).
+- Every call, a hook's, `qd.<service>.<method>.call()` or `call`, reads and
+  writes alike, is bound as it is made to the user it is made as, and goes
+  out only on a socket whose own hello names that user. A socket speaks
+  for whoever its credentials named when it connected, which a session
+  cookie can change unseen (another tab signs someone else in), and only
+  its hello says whom. So from the first connect, or a drop, until the
+  socket's hello, quickdraw holds calls itself, never in Socket.IO's send
+  buffer, and the hello sends them, in the order they were made, or fails
+  `CANCELLED` each one made as someone else. That includes a call made
+  while a socket whose ping is overdue still reads connected, a moment
+  before it drops: Socket.IO buffers it, and quickdraw takes it back out
+  and holds it, and the drop fails anything else left in that buffer. `setAuth`, `close` and a
+  refused session fail the calls held `CANCELLED`; one whose time runs out
+  first fails `INTERNAL` ("Not sent: the connection to the server is
+  down"). A channel message (`useChannel`'s `send`) sent before that hello,
+  or in that moment, is dropped, as input the next one supersedes, and `isReady` reads false
+  meanwhile, though a drop keeps the last hello. The reads that resume live
+  rows and collections still go at the connect: their answers follow the
+  hello, and a hello naming another user drops them.
+- A mutation hook's call is bound, as it is made, to the user it is made as
+  and to the credentials it is made under, and each attempt is checked
+  before it goes out: one whose user changed first (`setAuth` in the same
+  handler, an async `onMutate`, a pause while offline, a `scope` queue, a
+  retry, a cookie that names someone else after a reconnect) fails
+  `CANCELLED`, is not sent as the next user, and is not retried. An attempt
+  that starts while new credentials await their hello is refused the same
+  way, even for the same user's refreshed token (it is not held until the
+  hello); one that starts once that hello names the call's user is sent. A
+  call made after the server ended the session is sent only if the next
+  hello comes under the same credentials (a cookie that signs in again)
+  and names that session's user; new credentials (`setAuth`) refuse it,
+  even for that user. A first connect the server refuses ends a session
+  no hello named: whoever signs in next under the same credentials claims
+  a call made after it. A refused item's `retry()` sends again as the user
+  who made the call, and when this check stops it the item shows in
+  `refused` again, with the `CANCELLED`.
+- A mutation hook shows a call (its `data`, `error`, `variables` and
+  status) only to the user it is made as, while the server's hello names
+  them. A component that stays mounted while the user changes shows the
+  next user none of the last user's calls, finished or in flight, and none
+  while new credentials await their hello; the same user's shows again
+  once their hello arrives, and stays through a reconnect. `throwOnError`
+  throws only such an error. The call still settles, and its callbacks
+  still run, for the user who made it. A call made while no hello is held
+  (before the first, while new credentials await theirs, after the server
+  ended the session) becomes the call of the user the next hello under the
+  same credentials names, even once it settled (after a session the server
+  ended, only if it names that session's user again, and after a refused
+  first connect, whoever signs in). It shows, pending
+  and then its answer or error, while no hello is held under the same
+  credentials, and once one is, only to that user: one the hello did not
+  make anyone's (another user's cookie after the session ended) shows to
+  nobody. New credentials hide it. A
+  call that itself switches the user (an anonymous sign-in or sign-up,
+  then `setAuth`) hides its result once the new hello arrives: act on it
+  in `onSuccess`.
 - Live rows and collections need no refetching: frames keep them current,
   and after a reconnect they resume by revision. A query whose result
   follows writes declares `watch` in its contract; the coordinator fetches
@@ -1789,7 +1932,24 @@ export function TaskDetail({ id }: { readonly id: string }) {
   quickdraw cached, and no `useQuery` of the client shows a placeholder made
   from it (`placeholderData` such as `keepPreviousData`), nor `useSearch` its
   last results; new credentials for the same user refetch it; new grants
-  (`qd:access`) refetch every query.
+  (`qd:access`) refetch every query. Live entries never take a placeholder,
+  whatever `placeholderData` default the `QueryClient` sets: `useEntity`,
+  `useCollection` and a search's held scope show nothing of another row,
+  scope or user while a new id, scope or user loads. A mounted mutation
+  hook shows the next user none of the last user's calls, and no call or
+  channel message is sent as the next user (above). The same hello takes
+  quickdraw's mutations (a mutation hook's, whatever key its options give,
+  and any keyed under `["qd", …]`) out of TanStack's mutation cache, so
+  TanStack's `useMutationState` and `useIsMutating` find none of the last
+  user's: one that ran or failed at once, one still running at once (it
+  settles out of the cache, and its callbacks run for the user who made
+  it), and one TanStack holds paused (offline, or queued in its `scope`)
+  once it resumes and is refused, since TanStack resumes only what its cache
+  holds. Until then those hooks still see it. After a session the server
+  ended they wait for the next hello: one naming the same user keeps them
+  (that user's calls may still go out as them), and any other takes them
+  out. The same user's new credentials keep them, and the app's own
+  mutations, under keys of its own, stay.
 - A protocol mismatch reloads the page once per session by default
   (`onProtocolMismatch`); `RATE_LIMITED` answers back off with jitter per
   kind of work.
@@ -1945,10 +2105,10 @@ export async function TasksPage({ projectId, cookie }: { projectId: string; cook
 A script, a CLI or a worker uses the connection directly, from
 `@fitzzero/quickdraw-core/client/core`: the client without React, for a
 process that installs neither React nor TanStack Query. It holds the
-connection, `call` and `callData`, `newId`, the auth helpers, peer links,
-host mode and everything on `./utils`. Nothing it imports, in its code or
-its types, is React or TanStack, and it carries no `"use client"`.
-`./client` re-exports all of it, the same functions:
+connection, `call` and `callData`, `newId`, the auth helpers, a live store,
+peer links, host mode and everything on `./utils`. Nothing it imports, in
+its code or its types, is React or TanStack, and it carries no
+`"use client"`. `./client` re-exports all of it, the same functions:
 
 <!-- example: apps/api/scripts/report.ts#script -->
 
@@ -1970,11 +2130,95 @@ process.stdout.write(`${String(count)} tasks\n`);
 connection.close();
 ```
 
-Live rows and collections take a TanStack `QueryClient`, so they are on
-`./client` only, still without React: `liveDataOf(connection, queryClient)`
-holds them for code without hooks (a React Native module, a Node client
-that keeps a `QueryClient`), and `createInvalidationCoordinator(queryClient)`
-invalidates as the hooks do.
+A script holds live data from the same entry, as the hooks do.
+`liveStoreOf(connection)` is the connection's live store, one per
+connection, made before `open()`; `holdCollection`, `holdEntity` and
+`holdStream` hold a collection scope, a row or a stream feed in it, typed
+by the contract, and call a listener with what they show: what
+`useCollection`, `useEntity` and `useStream` return, without the optimistic
+overlays (no mutation opens one there). The listener is first called once
+`hold*` has returned, then at most once a microtask while what it shows
+changes; `current()` reads it at any time, and `release()` lets go of it.
+The store follows the connection as the hooks' live data does: what it
+holds resumes from its revisions after a reconnect, loads again from
+scratch when another user signs in, and empties when the server ends the
+session. A scope that no other socket holds is read again after a
+reconnect, though: the server buffers a scope's deltas only while some
+socket subscribes to it. An entry stays while something holds it, and goes
+a tick after its last holding is released. A holding does not report a
+refused connection (bad credentials send no subscribe, so `error` stays
+`null`): watch `connection.getState().status` for `"refused"`, as the
+example does. A connection whose live data a `QueryClient`
+holds (a `QuickdrawProvider`'s) takes no live store, and the other way
+round: two on one socket would unsubscribe each other's rows and scopes,
+so `liveStoreOf` (or `liveDataOf`) throws.
+
+<!-- example: apps/api/scripts/waitForTask.ts#script -->
+
+```ts
+import {
+  createQuickdrawConnection,
+  holdCollection,
+  liveStoreOf,
+} from "@fitzzero/quickdraw-core/client/core";
+import { taskContract } from "@project/shared";
+
+const projectId = process.argv[2];
+if (projectId === undefined) {
+  throw new Error("usage: wait-for-task <projectId>");
+}
+const connection = createQuickdrawConnection({
+  url: "http://localhost:4000",
+  auth: process.env.API_TOKEN,
+});
+// made before open(), so it follows the connection from its first hello
+const live = liveStoreOf(connection);
+connection.open();
+try {
+  const taskId = await new Promise<string>((resolve, reject) => {
+    const done = (): void => {
+      board.release();
+      stop();
+    };
+    const board = holdCollection(
+      live,
+      { contract: taskContract, collection: "board", scope: projectId, load: "all" },
+      // called once holdCollection has returned, then as the board changes
+      (scope) => {
+        const open = scope.items.find((card) => card.status === "open");
+        if (scope.error !== null) {
+          done();
+          reject(scope.error);
+        } else if (open !== undefined) {
+          done();
+          resolve(open.id);
+        }
+      },
+    );
+    // refused credentials send no subscribe: the board alone would wait forever
+    const stop = connection.subscribe(() => {
+      const { status, refusal } = connection.getState();
+      if (status === "refused") {
+        done();
+        reject(new Error(`the server refused the connection: ${refusal?.code ?? "REFUSED"}`));
+      }
+    });
+  });
+  process.stdout.write(`${taskId}\n`);
+} finally {
+  connection.close();
+}
+```
+
+Code that keeps a TanStack `QueryClient` (a React Native module, a Node
+client beside hooks) holds live rows and collections in it instead, from
+`./client`, still without React: `liveDataOf(connection, queryClient)` holds
+them for code without hooks, and `createInvalidationCoordinator(queryClient)`
+invalidates as the hooks do. A row or scope held that way keeps its entry
+for as long as it is held, however long past the `QueryClient`'s `gcTime`;
+once its last holder lets it go (the function `entities.subscribe` returns,
+or a scope holding's `release()`), TanStack collects the entry `gcTime`
+later, unless a hook shows it.
 
 A client in another language (a Godot game, a native app) speaks the wire
 itself: [`docs/protocol-v5.md`](docs/protocol-v5.md) is its specification,
@@ -2182,6 +2426,7 @@ their variants):
 
 ```tsx
 export function TaskPages({ projectId }: { readonly projectId: string }) {
+  const queryClient = useQueryClient();
   const filter = { projectId };
   // the list's own key (plus a suffix: pages are not one list result) and call,
   // so qd.invalidate(qd.task.list) refetches these pages too
@@ -2191,6 +2436,9 @@ export function TaskPages({ projectId }: { readonly projectId: string }) {
       qd.task.list.call({ filter, cursor: pageParam, limit: 50 }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
+    // the last project's pages stay shown while the next one's load, but never another user's:
+    // placeholderFromSession, called on every render, drops what a switch of users left
+    placeholderData: placeholderFromSession(queryClient, keepPreviousData),
   });
   const cards = pages.data?.pages.flatMap((page) => page.items) ?? [];
   return (
@@ -2209,6 +2457,17 @@ export function TaskPages({ projectId }: { readonly projectId: string }) {
   );
 }
 ```
+
+A mounted TanStack hook keeps the last query that held data and makes its
+placeholder from it, and after a switch of users that query is the last
+user's: a member's `useQuery` and `useSearch` drop it themselves, and a hook
+of the app's own does so when its `placeholderData` goes through
+`placeholderFromSession(queryClient, placeholderData)` from `./client`,
+called on every render (TanStack reuses a placeholder without asking while
+the option is the same function), as above. Until the hello on new
+credentials arrives, the cache also still holds the last user's results,
+which a member's hooks hide and a hook of the app's own does not: render it
+only while `isKnown`, as `AuthGate` above does.
 
 ### Search kit
 
@@ -2656,7 +2915,9 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   transaction's tracked client; a throw undoes the write and fails the
   call): what an admin edit must set off, such as a game reloading its
   tunables, without wrapping the kit's handlers. The rows are the entity,
-  every field. `onCommitted({ method, id, before?, after }, ctx)` runs once
+  every field. Its statements get the development checks a handler's get
+  (a loop of writes in it is an `n-plus-one`), as `prepare`'s do.
+  `onCommitted({ method, id, before?, after }, ctx)` runs once
   the write has committed (after `onWrite`'s transaction), in a detached
   unit of work of its own: the reply does not wait for it, its writes flush
   on their own, and a throw is logged, the write standing. Apply an edit to
@@ -2686,9 +2947,21 @@ before?, after }, ctx, db)` after each `adminCreate`, `adminUpdate` and
   what the database deletes or clears with a row (`onDelete: Cascade`,
   `SetNull`), so those rows stay in the lists and entities open on them;
   delete or clear them through `db` in `prepare`, and their subscribers are
-  told. `prepare` shares the write's transaction, and so its time limit
-  (Prisma's default is 5 seconds; a client's `transactionOptions` sets
-  another):
+  told. `prepare` shares the write's transaction, and so its time limit,
+  Prisma's 5 seconds by default: for a large cascade, such as a user's
+  delete clearing their rows in every service, give that transaction
+  another with `admin.handlers(contract, { transaction: { timeoutMs: 30_000 } })`
+  (`maxWaitMs`, how long it may wait to start, is Prisma's 2 seconds by
+  default; a client's `transactionOptions` changes both for every
+  transaction). A write that runs past it is undone and fails `INTERNAL`.
+  The call's own time limit still applies, from the call's start: raise
+  `limits.callTimeoutMs` above the transaction's `timeoutMs` plus
+  `maxWaitMs`, or the caller gets `TIMEOUT` for a write that commits. A
+  method's own `timeoutMs` (on its kit entry) raises it for in-process,
+  HTTP and MCP callers only: a socket client waits `limits.callTimeoutMs`
+  plus 2 s, or its connection's `timeoutMs`. The limits are
+  positive numbers of milliseconds, and `transaction` is refused without a
+  hook, which opens no transaction:
 
 <!-- example: apps/api/src/services/kits/admin.ts#prepare -->
 
@@ -2901,7 +3174,14 @@ export function TaskRoom({
   history is the app's: store the rows and expose a collection), and sends
   `qd:stream [service, stream, scope, item]` (`scope` null for a global
   stream; positional, so a fast stream's frames carry no key names) to the
-  feed's subscribers, volatile when the stream says so. `pushMany(scope, items)`
+  feed's subscribers. A `volatile` stream drops an item for a socket only
+  while its connection is backed up (64 relay messages and volatile frames
+  sent to it waiting for its transport), never because another frame went
+  to it just before. On a free connection the first item of a burst goes at
+  once and 64 more wait for it; the rest are dropped until the connection
+  sends what waits, so push a snapshot instead of a bigger burst. Behind a
+  cluster adapter its items go to every node, as a seeded stream's do, and
+  each node checks its own sockets (docs/deploying.md). `pushMany(scope, items)`
   (`pushMany(items)` for a global stream) pushes several items to one feed
   at once: every item is checked before any is kept or sent, and each goes
   out as its own frame, in order; use it rather than `push` in a loop
@@ -2931,11 +3211,14 @@ export function TaskRoom({
   a global stream; also on `server.stream` and `dispatcher.stream`) is how
   many sockets subscribe to the feed, on every node, anonymous ones
   included: the sockets a push reaches. Behind a cluster adapter the other
-  nodes answer one request with a count each, never their sockets; an
-  answer that does not arrive within `cluster.timeoutMs` counts as 0
+  nodes answer one request with a count each, never their sockets; a node
+  that does not answer in time counts as 0 while the others' answers count
   (warned at most once every 10 minutes), and so does a node of an earlier
-  version. `qd.rooms` refuses the stream rooms' reserved `qd:` names, and
-  Socket.IO's own rooms hold one node's sockets: count with `subscribers`.
+  version. "In time" is the adapter's own `requestsTimeout`, which
+  `setupRedisAdapter` sets to `cluster.timeoutMs`, or `cluster.timeoutMs`
+  for an adapter without one (docs/deploying.md). `qd.rooms` refuses the
+  stream rooms' reserved `qd:` names, and Socket.IO's own rooms hold one
+  node's sockets: count with `subscribers`.
   A host-served stream's handle refuses it, as it refuses `push`: only the
   host's client knows who subscribes.
 - A service's `streams: { <name>: { seed, validate } }` (type
@@ -2946,8 +3229,12 @@ export function TaskRoom({
   `validate: "development"` checks pushed items only while the dispatcher
   checks outputs (`outputValidation`, off in production), for a hot stream:
   unchecked, an item goes out as pushed, extra keys included.
-- Channels: each message is `qd:ch [service, channel, payload]`, sent
-  volatile and never answered. Per socket and channel a token bucket
+- Channels: each message is `qd:ch [service, channel, payload]`, never
+  answered. The client drops one rather than queue it while its connection
+  is backed up (64 packets, or more than 32 KiB, waiting to be sent), never
+  because another went out just before: of a burst, 64 go out, and the rest
+  are dropped until the connection has sent them (on a WebSocket, by the
+  next tick). Per socket and channel a token bucket
   (`ratePerSecond`, default 30; `burst`, default twice that) drops what is
   over the rate, and a socket whose drops within 10 s pass 100 times the
   rate is disconnected. A message from an anonymous socket, one that fails
@@ -3005,7 +3292,11 @@ ping: { access: "authenticated", handler } }`, which delivers as before
 input, { enabled?, onJoined? })` (from `./client`) runs the joining call
   (`enterBoard` above) on every `qd:hello` and when its input changes by
   value, never on a re-render, and shows `status` (`idle` with no socket to
-  join with, `joining`, `joined`, `error`), `isJoined`, `data` and `error`;
+  join with, `joining`, `joined`, `error`), `isJoined`, `data` (what the
+  last join returned, to the user it ran as and for the input it ran with
+  only: hidden while new credentials await their hello, never the next
+  user's, and never another input's, so a new input shows `joining` with
+  no `data` from its first render until its own answer) and `error`;
   a refusal stands until the next hello or `retry()` (which runs the call
   again at once on the current socket, and does nothing while there is
   none or `enabled` is false), `RATE_LIMITED` is tried again after its
@@ -4175,10 +4466,12 @@ What it does with them:
 
 While `NODE_ENV` is not `"production"`, a running app warns about the slow
 and untracked patterns lint cannot see, as they happen. Every warning has
-one format and names the method call it happened in (one exception:
+one format and names the method call it happened in (except for three:
 `untracked-access-model` is checked as the server starts and logged as an
 error under `category: "quickdraw.access"`, in every environment, at each
-start):
+start, and `authenticate-threw` and `mcp-principal-threw` come from a
+handshake, an HTTP request or an MCP tool call's session, before any
+method's call):
 
 ```text
 [quickdraw:n-plus-one] taskService.board: task.findUnique by id ran 10 times in one call, once per item (N+1); ...
@@ -4199,6 +4492,8 @@ start):
 | `untracked-access-model`   | a model a policy, a membership table or a `via` junction depends on has no `id` the write tracker can key its rows by, so no write to it revokes; checked when the server starts, logged as an error in every environment |
 | `shared-principal`         | the handler of a `share: "all"` run (an app's, not a kit's) read `ctx.principal`, `ctx.services`, `ctx.mcp` or `ctx.access`: the run has the first caller's, and every caller gets its result                             |
 | `channel-without-requires` | a channel's contract declares no `requires` and its service no `access`, so every signed-in user may send it; raised when the server is made                                                                              |
+| `authenticate-threw`       | the server's `authenticate` threw anything but a `QuickdrawError`, which both transports take for the server's failure (`INTERNAL`), so a refusal made that way never signs a client out; once per server                 |
+| `mcp-principal-threw`      | an MCP registry's `principal` hook threw anything but a `QuickdrawError`, which the bridge answers `INTERNAL`, so an agent whose token it refused that way is told the server failed; once per registry                   |
 
 Updates and deletes by id inside an interactive transaction are not counted
 toward `n-plus-one`: that is how per-row writes are written (see tracked
@@ -4207,7 +4502,7 @@ model, the field of a nested write, or the member a shared run read), under
 `category: "quickdraw.dev"`.
 Only an app's own statements are checked: the framework's reads and the
 kits' own reads are not, while the app's callbacks a kit calls (`prepare`,
-`onChange`, `resolveUser`, a search strategy) are. A statement filtered by
+`onWrite`, `onChange`, `resolveUser`, a search strategy) are. A statement filtered by
 an `id` list (`{ id: { in: ids } }`, one per chunk of ids) never counts
 toward `n-plus-one`, and neither does a `createMany` (one per chunk of
 rows, as a large insert is split). In tests, `createTestApp({ strictWarnings: true })`
@@ -4217,8 +4512,9 @@ fails: the call it happened in fails with `INTERNAL` and the error as its
 `cause`, and an in-process call whose reply was oversized rejects with it
 once the reply was recorded (over a socket or HTTP the reply was already
 sent, so that error is logged, not thrown). Strictness belongs to the app:
-warnings outside its calls (an ambient write while seeding, another app's
-calls) are logged as usual, and `app.close()` ends it. The ones raised when
+warnings outside its calls (an ambient write while seeding, an
+`authenticate` that threw, another app's calls) are logged as usual, and
+`app.close()` ends it. The ones raised when
 the app is made, `tiered-field-in-output`, `resolver-without-reads`,
 `untracked-access-model` and `channel-without-requires`, are thrown from
 `createTestApp` itself, so a strict app over such a method, policy, table
@@ -4296,7 +4592,10 @@ afterEach(() => mock.$reset()); // forget it all (automatic when the runner has 
 
 Each method member has `mockResolvedValue`, `mockRejectedValue`,
 `mockImplementation`, `mockReset` and `calls`; streams have `mockItems`,
-channels `sent` and events `mockEmit`. Everything set is forgotten after
+channels `sent` and events `mockEmit`. A new answer refetches, once, the
+method's results cached when it is set; a component rendered after it reads
+the new answer with its own first fetch, so `calls` counts one call per
+mount. Everything set is forgotten after
 each test only when the test runner has a global `afterEach` (vitest with
 `globals: true`, or jest), where the mock registers its own reset
 (`resetAfterEach: false` opts out); otherwise call `mock.$reset()` in an
@@ -4309,7 +4608,19 @@ who it acts for, set with `createMockClient(contracts, { session })` and
 `mock.$session({ userId, serviceAccess, isConnected, isKnown })` (each field
 left out keeps its starting value, and the reset after each test puts the
 starting session back), and the rooms `mock.$presence(room, userIds)` sets.
-Its views select members for the session's user:
+Its views select members for the session's user, and its cache follows the
+session by the real client's rules: a `$session` naming another user
+empties it of quickdraw's queries and mutations, a mutation hook shows a
+call only to the user it was made as (and refuses one whose user changed
+before it ran), a query reads once a hello names the session's user, and
+`isKnown: false` after a known session is new credentials awaiting their
+hello: the hooks show nothing of what is cached, and the same user's hello
+after it reads every query again. It does not model two of the real
+client's rules: a mutation made before new credentials whose attempt
+starts while they await their hello calls its stub where the real client
+refuses it `CANCELLED`, and calls are not held until the socket's hello.
+Test those against `createTestApp` and the real client. A test sets the
+session, then renders under `mock.$Provider`:
 
 <!-- example: apps/web/src/components/TaskBoard.test.tsx#session -->
 
@@ -4328,8 +4639,9 @@ show the last story's in all of them: give each its own with the
 provider's `session` prop, `<qd.$Provider session={{ userId: null }}>`
 (a `MockSession`, the type `$session(...)` takes too), laid over the
 mock's session field by field for that subtree alone (the
-real `useQuickdraw()` and `usePresence`, and the mock's views and admin
-grants, read it there).
+real `useQuickdraw()` and `usePresence`, and the mock's views, admin
+grants, queries and mutation hooks, read it there; the mock's one cache
+follows the mock's own session, not a provider's).
 
 ### Test databases
 
@@ -4347,14 +4659,20 @@ package gives its test client from it while tests run:
 ```ts
 // this worker's own database: the migrated template, loaded in milliseconds
 const pglite = await openPgliteFromTemplate(TEST_TEMPLATE);
-export const prisma = new PrismaClient({ adapter: new PrismaPGlite(pglite) });
+// withSavepoints: nested transactions (tx.$transaction inside one) run here as on PostgreSQL
+export const prisma = new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) });
 ```
 
 `TEST_TEMPLATE` is `{ migrationsDir, cacheDir, templateName }`, the same the
 global setup builds with (`buildPgliteTemplate(TEST_TEMPLATE)`, or
 `createPrismaTestGlobalSetup`), and a setup file empties the database before
 each test (`beforeEach(() => resetDatabase(prisma))`). Apply `trackPrisma`
-to the test client exactly as in production.
+to the test client exactly as in production. `withSavepoints(factory)`
+gives the adapter's transactions the savepoints Prisma 7 runs a nested
+`tx.$transaction(...)` with, as `@prisma/adapter-pg` runs them, so code that
+nests transactions commits and rolls back on PGlite as on PostgreSQL;
+`pglite-prisma-adapter` has none, and Prisma refuses a nested transaction
+on it without them. An adapter with savepoints of its own keeps them.
 
 ## Observability
 

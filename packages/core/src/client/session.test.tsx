@@ -7,7 +7,12 @@
 // (Admin on P1, who may read a task's `notes`) to Cy (Read on P1) or Ed (no
 // access to P1).
 
-import { keepPreviousData, QueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  QueryClient,
+  useInfiniteQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -21,6 +26,8 @@ import { overlaysOf } from "./optimistic";
 import { mutateOptimistically } from "./optimisticCall";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
 import { renderWithQuickdraw } from "../testing/client";
+import { cacheSessionOf } from "./cacheSession";
+import { placeholderFromSession } from "./index";
 import { sessionOf } from "./session";
 import { outgoing, until } from "./__tests__/fixtures";
 import { callsOf, framesOf } from "./__tests__/live";
@@ -143,7 +150,8 @@ describe("the session of a connection and a QueryClient", () => {
       id: "t1",
       title: "Pending",
     });
-    const told = vi.fn();
+    // What the overlays' listeners read when told: the queries are removed first.
+    const told = vi.fn((): unknown => queryClient.getQueryData(entityKey("taskService", "t1")));
     overlays.subscribe(told);
 
     fake.setState({ hello: null });
@@ -156,6 +164,7 @@ describe("the session of a connection and a QueryClient", () => {
       title: "T1",
     });
     expect(told).toHaveBeenCalled();
+    expect(told.mock.results.map((result) => result.value)).toEqual([undefined]);
     expect(changes).toEqual([
       { switched: false, first: true },
       { switched: true, first: true },
@@ -205,6 +214,34 @@ describe("the session of a connection and a QueryClient", () => {
     other.setState({ hello: fakeHello("cy") });
     sessionOf(other.connection, queryClient);
     expect(queryClient.getQueryData(entityKey("taskService", "t1"))).toBeUndefined();
+  });
+
+  it("tells its listeners of another user's hello and of a server end once the cache is emptied", () => {
+    const { fake, queryClient, fill } = setup();
+    fake.setState({ hello: fakeHello("ada") });
+    const read: unknown[] = [];
+    sessionOf(fake.connection, queryClient).onHello(() => {
+      read.push(queryClient.getQueryData(entityKey("taskService", "t1")));
+    });
+    fill();
+    fake.setState({ hello: null });
+    fake.setState({ hello: fakeHello("cy") });
+    fill();
+    fake.setState({ hello: null, status: "disconnected" });
+    fake.deliver("disconnect", "io server disconnect");
+    expect(read).toEqual([undefined, undefined]);
+  });
+
+  it("is one session per connection and cache, however often it is asked for", () => {
+    const fake = fakeConnection();
+    const queryClient = new QueryClient();
+    expect(sessionOf(fake.connection, queryClient)).toBe(sessionOf(fake.connection, queryClient));
+    const owner = {};
+    const effects = { empty: vi.fn(), refresh: vi.fn() };
+    const session = cacheSessionOf(fake.connection, owner, effects);
+    expect(cacheSessionOf(fake.connection, owner, effects)).toBe(session);
+    expect(cacheSessionOf(fake.connection, {}, effects)).not.toBe(session);
+    expect(cacheSessionOf(fakeConnection().connection, owner, effects)).not.toBe(session);
   });
 });
 
@@ -588,6 +625,261 @@ describe("placeholder data across a switch of users", () => {
     await view.findByText(`${board.ed}: get none`);
     await tick(100);
     expect(view.getByText(`${board.ed}: get none`)).toBeTruthy();
+    expect(leaked(seen, before)).toEqual([]);
+  });
+});
+
+describe("live entries under a placeholderData default", () => {
+  async function started() {
+    const { app } = await live.start();
+    const board = live.board();
+    await live.prisma().task.update({ where: { id: board.t1 }, data: { notes: "SECRET" } });
+    return { app, board };
+  }
+
+  /** A `QueryClient` whose every query keeps its last data as a placeholder while the next loads. */
+  const keeping = (): QueryClient =>
+    new QueryClient({
+      defaultOptions: { queries: { placeholderData: keepPreviousData, retry: false } },
+    });
+
+  /** A row as a render shows it: `title/notes`, `none`, or the error's code. */
+  const rowText = (
+    row: { readonly title: string; readonly notes?: string | null } | undefined,
+    error: { readonly code: string } | null,
+  ): string => {
+    if (error !== null) {
+      return `refused ${error.code}`;
+    }
+    return row === undefined ? "none" : `${row.title}/${String(row.notes)}`;
+  };
+
+  /**
+   * `useEntity` of the row `rowOf` names for the user the connection acts for: the key changes
+   * in the render that shows a new hello, as a header showing the signed-in user's row does.
+   */
+  function UserRow({
+    rowOf,
+    seen,
+  }: {
+    readonly rowOf: (userId: string | null) => string | null;
+    readonly seen: Seen;
+  }) {
+    const { userId } = useQuickdraw();
+    const id = rowOf(userId);
+    const { data, error, isLoading } = qd.task.useEntity(id);
+    const shown = `row ${id ?? "-"} ${rowText(data, error)}${isLoading ? " loading" : ""}`;
+    seen.push([userId, shown]);
+    return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+  }
+
+  /** What the renders for `user` showed of the last user's row. */
+  const leaked = (seen: Seen, user: string): string[] =>
+    shownTo(seen, user).filter((shown) => shown.includes("T1/") || shown.includes("SECRET"));
+
+  it("shows the next user none of the last user's row when its key changes with the hello", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const rowOf = (userId: string | null): string | null =>
+      userId === board.ada ? board.t1 : userId === board.ed ? board.t2 : null;
+    const view = await renderWithQuickdraw(<UserRow rowOf={rowOf} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`${board.ada}: row ${board.t1} T1/SECRET`);
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(new RegExp(`^${board.ed}: row ${board.t2} T2/`));
+    expect(leaked(seen, board.ed), JSON.stringify(shownTo(seen, board.ed))).toEqual([]);
+  });
+
+  it("shows the next user none of it after a session the server ended, either", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const rowOf = (userId: string | null): string | null =>
+      userId === board.ada ? board.t1 : userId === board.ed ? board.t2 : null;
+    const view = await renderWithQuickdraw(<UserRow rowOf={rowOf} seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`${board.ada}: row ${board.t1} T1/SECRET`);
+    app.server.access.disconnectUser(board.ada);
+    await view.findByText("-: row - none");
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(new RegExp(`^${board.ed}: row ${board.t2} T2/`));
+    expect(leaked(seen, board.ed), JSON.stringify(shownTo(seen, board.ed))).toEqual([]);
+  });
+
+  it("shows the next user none of the last user's scope when its key changes with the hello", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    function UserScope() {
+      const { userId } = useQuickdraw();
+      const scope = userId === board.ada ? board.p1 : userId === board.ed ? board.p2 : null;
+      const { items, error, isLoading } = qd.task.byProject.useCollection(scope);
+      const titles = error === null ? items.map((item) => item.title).join(",") : error.code;
+      const shown = `scope ${scope ?? "-"} [${titles}]${isLoading ? " loading" : ""}`;
+      seen.push([userId, shown]);
+      return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+    }
+    const view = await renderWithQuickdraw(<UserScope />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`${board.ada}: scope ${board.p1} [T1]`);
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: scope ${board.p2} [T2]`);
+    const toEd = shownTo(seen, board.ed);
+    expect(
+      toEd.filter((shown) => shown.includes("T1")),
+      JSON.stringify(toEd),
+    ).toEqual([]);
+  });
+
+  it("shows no other row under a new id of the same user's, and loads it", async () => {
+    const { app, board } = await started();
+    const t3 = await live.prisma().task.create({ data: { projectId: board.p1, title: "T3" } });
+    const seen: Seen = [];
+    function Row({ id }: { readonly id: string }) {
+      const { userId } = useQuickdraw();
+      const { data, error, isLoading } = qd.task.useEntity(id);
+      const shown = `row ${id} ${rowText(data, error)}${isLoading ? " loading" : ""}`;
+      seen.push([userId, shown]);
+      return <p>{shown}</p>;
+    }
+    const view = await renderWithQuickdraw(<Row id={board.t1} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+      queryClient: keeping(),
+    });
+    await view.findByText(`row ${board.t1} T1/SECRET`);
+    view.rerender(<Row id={t3.id} />);
+    await view.findByText(new RegExp(`^row ${t3.id} T3/`));
+    const asT3 = shownTo(seen, board.ada).filter((shown) => shown.startsWith(`row ${t3.id} `));
+    expect(asT3[0], JSON.stringify(asT3)).toBe(`row ${t3.id} none loading`);
+    expect(
+      asT3.filter((shown) => shown.includes("T1/")),
+      JSON.stringify(asT3),
+    ).toEqual([]);
+  });
+});
+
+describe("placeholder data of an app's own TanStack hook across a switch of users", () => {
+  async function started() {
+    const { app } = await live.start();
+    const board = live.board();
+    await live.prisma().task.update({ where: { id: board.t1 }, data: { notes: "SECRET" } });
+    return { app, board };
+  }
+
+  /**
+   * An app's own `useInfiniteQuery` over `get`'s key and call (one page per
+   * read), with TanStack's `keepPreviousData`, given through
+   * `placeholderFromSession` on every render when `guarded`. It reads, and
+   * shows its pages, only while the hello on the current credentials named
+   * the user (`isKnown`): until then the cache still holds the last user's
+   * results, which a hook of the app's own does not hide.
+   */
+  function KeptPages({
+    id,
+    guarded,
+    enabled = true,
+    seen,
+  }: {
+    readonly id: string;
+    readonly guarded: boolean;
+    readonly enabled?: boolean;
+    readonly seen: Seen;
+  }) {
+    const { userId, isKnown } = useQuickdraw();
+    const queryClient = useQueryClient();
+    const pages = useInfiniteQuery({
+      queryKey: [...qd.task.get.key({ id }), "pages"],
+      queryFn: ({ signal }) => qd.task.get.call({ id }, { signal }),
+      initialPageParam: 0,
+      getNextPageParam: () => undefined,
+      placeholderData: guarded
+        ? placeholderFromSession(queryClient, keepPreviousData)
+        : keepPreviousData,
+      enabled: isKnown && enabled,
+      retry: false,
+    });
+    const rows = pages.data?.pages.map((row) => `${row.title}/${String(row.notes)}`) ?? [];
+    const kept = pages.isPlaceholderData ? " kept" : "";
+    const result = pages.error === null ? `pages [${rows.join(", ")}]${kept}` : "pages refused";
+    const shown = isKnown ? result : "waiting";
+    seen.push([userId, shown]);
+    return <p>{`${userId ?? "-"}: ${shown}`}</p>;
+  }
+
+  /** What the renders since `from` showed of the last user's row. */
+  const leaked = (seen: Seen, from: number): Seen =>
+    seen.slice(from).filter(([, shown]) => shown.includes("SECRET"));
+
+  /** Ada reads T1, then the provider switches to Ed, who may not read it; returns what was seen since. */
+  async function switchFromAdaToEd(guarded: boolean) {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(
+      <KeptPages id={board.t1} guarded={guarded} seen={seen} />,
+      { app, as: as(board.ada), client: qd },
+    );
+    await view.findByText(`${board.ada}: pages [T1/SECRET]`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: pages refused`);
+    return { board, leaked: leaked(seen, before), ed: shownTo(seen, board.ed) };
+  }
+
+  it("shows the next user none of the last user's pages through placeholderFromSession", async () => {
+    const { leaked: shown, ed } = await switchFromAdaToEd(true);
+    expect(shown).toEqual([]);
+    expect(ed).toContain("pages []");
+  });
+
+  it("shows them to the next user as a placeholder without it, as TanStack keeps them", async () => {
+    const { board, leaked: shown } = await switchFromAdaToEd(false);
+    expect(shown).toContainEqual([board.ed, "pages [T1/SECRET] kept"]);
+  });
+
+  it("drops a placeholder already shown at the switch, since it is asked again on every render", async () => {
+    const { app, board } = await started();
+    const seen: Seen = [];
+    const view = await renderWithQuickdraw(<KeptPages id={board.t1} guarded seen={seen} />, {
+      app,
+      as: as(board.ada),
+      client: qd,
+    });
+    await view.findByText(`${board.ada}: pages [T1/SECRET]`);
+    // Another id, not read yet: Ada's T1 page stays shown in its place.
+    view.rerender(<KeptPages id={board.t2} guarded enabled={false} seen={seen} />);
+    await view.findByText(`${board.ada}: pages [T1/SECRET] kept`);
+    const before = seen.length;
+    await act(async () => {
+      view.connection.setAuth({ principal: as(board.ed) });
+      await tick();
+    });
+    await view.findByText(`${board.ed}: pages []`);
+    await tick(100);
+    expect(view.getByText(`${board.ed}: pages []`)).toBeTruthy();
     expect(leaked(seen, before)).toEqual([]);
   });
 });

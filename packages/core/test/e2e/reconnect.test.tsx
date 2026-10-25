@@ -3,8 +3,10 @@
 // it showed, catches up on what changed meanwhile, and resumes a board from
 // the server's recent-delta buffer when the buffer covers the outage, with
 // no snapshot read; when nobody kept the scope's buffer, it reads a snapshot.
-// A session the server ends is another matter (the 5.1 audit's CLIENT-1):
-// the client forgets the user and everything it cached.
+// A call made while the socket is down waits for the new socket's hello, and
+// goes out then, in order. A session the server ends is another matter (the
+// 5.1 audit's CLIENT-1): the client forgets the user and everything it
+// cached.
 
 import { within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -91,6 +93,43 @@ describe("disconnect() and reconnect()", () => {
     await ada.shown.findByText("board While away");
     await ada.shown.findByText("row While away");
     expect(pageReads()).toBeGreaterThan(before);
+  });
+
+  it("send the calls made meanwhile once the new socket's hello is in, in order, beside the reads that resume the row and the board", async () => {
+    const { board, renderAs } = await boards();
+    const ada = await renderAs(board.ada);
+    await ada.view.disconnect();
+    const { socket } = ada.view.connection;
+    const sent: string[] = [];
+    socket.onAnyOutgoing((event: string, frame: unknown) => {
+      const method = (frame as { readonly m?: unknown } | undefined)?.m;
+      sent.push(event === "qd:call" ? `qd:call ${String(method)}` : event);
+    });
+    // Heard before the connection's own listener: marks where the new socket's hello came in.
+    socket.onAny((event: string) => {
+      if (event === "qd:hello") {
+        sent.push("(hello)");
+      }
+    });
+    // Made while the socket is down: held, never in Socket.IO's send buffer.
+    const renames = [
+      qd.task.rename.call({ id: board.t1, title: "Held A" }),
+      qd.task.rename.call({ id: board.t1, title: "Held B" }),
+    ];
+    expect(socket.sendBuffer).toEqual([]);
+
+    await ada.view.reconnect();
+    await Promise.all(renames);
+    await ada.shown.findByText("row Held B");
+    await ada.shown.findByText("board Held B");
+    // The renames went once the hello was in, in the order they were made; the reads that
+    // resume the live data go from the connect on, beside them, and both catch up.
+    const calls = sent.filter((event) => event.startsWith("qd:call"));
+    expect(calls).toEqual(["qd:call rename", "qd:call rename"]);
+    expect(sent.indexOf("(hello)")).toBeLessThan(sent.indexOf("qd:call rename"));
+    expect(sent).toEqual(expect.arrayContaining(["qd:sub", "qd:col:sub"]));
+    const stored = await e2e.prisma().task.findUnique({ where: { id: board.t1 } });
+    expect(stored?.title).toBe("Held B");
   });
 });
 

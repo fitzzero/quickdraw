@@ -77,6 +77,10 @@ await app.close();
   `createPrismaTestGlobalSetup`, `workerDatabaseUrl` and `resetDatabase`
   (PostgreSQL, or PGlite when no `TEST_DATABASE_URL` is set; each worker
   boots its PGlite with `openPgliteFromTemplate`, which works under jsdom).
+  Wrap the PGlite adapter in `withSavepoints`
+  (`new PrismaClient({ adapter: withSavepoints(new PrismaPGlite(pglite)) })`),
+  or a nested `tx.$transaction(...)` is refused there while it passes on
+  PostgreSQL.
 - Seed rows with the untracked client (`prisma`), or inside `qd.run` (before
   the app starts too, when its writes reach no one): a tracked write outside
   any unit of work flushes on its own with an `ambient-write` warning.
@@ -180,7 +184,13 @@ declared `access`) are thrown by `createTestApp` itself: answer `"entity"`
 from that method, declare the resolver's `reads`, give the table an `id`,
 or give the channel a `requires` (or `access: "authenticated"` when any
 signed-in user may send it), rather than turning strictness off.
-Turn it on for service suites.
+Turn it on for service suites. `authenticate-threw` (the app's
+`authenticate` threw anything but a `QuickdrawError`) comes from a
+handshake or an HTTP request, before any call, so it is logged, never
+thrown, strict or not: refuse with `QuickdrawError("UNAUTHENTICATED")`
+instead, unless the test means an outage. `mcp-principal-threw` (an MCP
+registry's `principal` hook did the same) is logged, never thrown, in the
+same way, even from a registry over a strict test app's dispatcher.
 `createRecordingSink()` passed as `flushSink` records what each flush wrote.
 
 ## Components
@@ -211,6 +221,22 @@ Turn it on for service suites.
   and `mock.$presence(room, userIds)`. Never re-export `useQuickdraw` from
   the module you mock to fake it. `useAdminServices(mock)` asks only the
   services the session's `serviceAccess` allows.
+- The mock follows its session as the real client does, so a switch of
+  users tests what production shows: a `$session` naming another user
+  empties its quickdraw queries and mutations, a mutation hook shows a
+  call only to the user it was made as and refuses one whose user changed
+  before its attempt (`CANCELLED`, its stub never called), and a query
+  reads only once a hello names the user. `$session({ isKnown: false })`
+  after a known session stands for new credentials awaiting their hello:
+  the hooks show nothing cached, and the same user's hello reads every
+  query again. Set a stub's answer for the next user before the switch
+  (or `mockReset()` it) when a test checks what they read. It does not
+  model two of the real client's rules: a mutation made before new
+  credentials whose attempt starts while they await their hello
+  (`$session({ isKnown: false })` after a known session) calls its stub
+  where the real client refuses it `CANCELLED`, and calls are not held
+  until the socket's hello. Test those against `createTestApp` and the
+  real client.
 - Storybook and other browser bundles import the mock from
   `@fitzzero/quickdraw-core/testing/mock`, which names no Testing Library:
   a decorator wraps every story in `qd.$Provider`, and a story's

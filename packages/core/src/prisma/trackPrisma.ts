@@ -4,15 +4,33 @@
 // (4.1 `src/server/BaseService.ts:769-827`); a raw `prisma.task.update`
 // was invisible, and every live update needed a hand-written emit.
 //
-// Two client extensions, both public Prisma API:
+// Client extensions, all public Prisma API:
 //
 // 1. a `query` hook on every operation records writes (`operations.ts`) and
-//    counts statements;
+//    counts statements, over a runtime that says which client the operation
+//    came from. The root client runs it over the root runtime
+//    (`rootRuntime`), and each interactive transaction begins on a client of
+//    its own, extended from the given one with the hook over that
+//    transaction's runtime (`transactionRuntime`), which its savepoints'
+//    clients carry too. Prisma itself carries which hook an operation runs,
+//    through its lazy promises and batches alike, so no marker is set per
+//    call and no Prisma internal is read. The root client's work runs
+//    outside every interactive transaction, even inside one's callback, on a
+//    connection of its own: its reads and writes go through the root
+//    client, and its writes skip every open transaction frame, unless an
+//    array-form batch runs them as its own. A transaction's client runs its
+//    work in that transaction wherever it is used (another transaction's
+//    callback, an array-form batch): its reads go through it and its writes
+//    into its frame; once the transaction ended, the hook runs its work as
+//    written, which Prisma refuses;
 // 2. a `client` extension replaces `$transaction`, so writes inside a
-//    transaction are buffered and join the unit of work only once it commits.
-//    It calls the `$transaction` of the client from step 1, so the
-//    transaction's client carries the hook. Transactions are found through
-//    that wrapper and `AsyncLocalStorage`, never through Prisma internals.
+//    transaction are buffered and join the unit of work only once it commits:
+//    one begun on the root client commits on its own, wherever it is begun.
+//    The transaction's client is handed to its callback behind a proxy whose
+//    `$transaction` goes through the tracker too (`nestable`): on Prisma 7
+//    the interactive form is a savepoint, whose writes join the transaction
+//    around it only once the savepoint is released, and the array form a
+//    transaction of its own, as Prisma runs it.
 //
 // Make it the last extension applied: an extension added after it still
 // runs outside transactions, but not on a transaction's client.
@@ -34,7 +52,11 @@ import {
   type FindManyArgs,
   type StorageAdapter,
 } from "../server/storage";
-import { createWriteTracker, type WriteTracker } from "../server/uow/unitOfWork";
+import {
+  createWriteTracker,
+  type TrackedTransaction as TransactionFrame,
+  type WriteTracker,
+} from "../server/uow/unitOfWork";
 import {
   delegates,
   idOf,
@@ -118,14 +140,77 @@ function count(
 ): void {
   runtime.tracker.countStatement();
   if (model !== undefined) {
-    runtime.tracker.observe({ model: modelKey(model), operation, args });
+    runtime.observe({ model: modelKey(model), operation, args });
   }
+}
+
+/** What every runtime of a tracked client shares. */
+type SharedRuntime = Pick<Runtime, "tracker" | "interestOf" | "linksOf" | "untracked">;
+
+/**
+ * The runtime of the root client's operations. They run outside every
+ * interactive transaction, even inside one's callback, on a connection of
+ * their own: the hook's own queries go through the root client, and their
+ * writes skip every open transaction frame, unless an array-form batch runs
+ * them as its own (`WriteTracker.record`).
+ */
+function rootRuntime(shared: SharedRuntime, root: () => unknown): Runtime {
+  const { tracker } = shared;
+  return {
+    ...shared,
+    live: () => true,
+    inBatch: () => tracker.inBatch(),
+    delegate: (model) => delegateOf(root(), model),
+    record: (writes) => {
+      tracker.record(writes, "root");
+    },
+    observe: (statement) => {
+      tracker.observe(statement, "root");
+    },
+  };
+}
+
+/**
+ * The open frames of one transaction begun on the root client and of the
+ * savepoints nested in it, innermost last: where that transaction's
+ * clients' work goes, whichever frame is active where it runs.
+ */
+type Lineage = TransactionFrame[];
+
+/**
+ * The runtime of one transaction's clients, its own and its savepoints'
+ * (`lineage`). Their operations run in that transaction, even inside
+ * another transaction's callback or in an array-form batch: the hook's own
+ * queries go through the innermost open savepoint's client, and their writes
+ * into its frame. Once the transaction ended, `live` is false, and the hook
+ * runs an operation as written, which Prisma refuses.
+ */
+function transactionRuntime(shared: SharedRuntime, lineage: Lineage): Runtime {
+  const { tracker } = shared;
+  return {
+    ...shared,
+    live: () => lineage.length > 0,
+    // Its operations run in its transaction, never in an array-form batch holding them.
+    inBatch: () => false,
+    delegate: (model) => delegateOf(lineage.at(-1)?.client, model),
+    record: (writes) => {
+      lineage.at(-1)?.record(writes);
+    },
+    observe: (statement) => {
+      tracker.observe(statement, "transaction");
+    },
+  };
 }
 
 function createHook(runtime: Runtime) {
   return async function track({ model, operation, args, query }: QueryHookArgs): Promise<unknown> {
     const handler = model === undefined ? undefined : WRITE_OPERATIONS[operation];
-    if (model === undefined || handler === undefined || runtime.untracked.has(modelKey(model))) {
+    if (
+      model === undefined ||
+      handler === undefined ||
+      runtime.untracked.has(modelKey(model)) ||
+      !runtime.live()
+    ) {
       count(runtime, model, operation, args);
       return query(args);
     }
@@ -144,28 +229,148 @@ function createHook(runtime: Runtime) {
   };
 }
 
-/** `$transaction`, in both forms, inside a transaction frame of the tracker. */
-async function transaction(
-  tracker: WriteTracker,
-  hooked: ExtendedClient,
-  arg: unknown,
-  options: unknown,
+/** What every transaction of a tracked client begins on. */
+interface TransactionSettings {
+  readonly tracker: WriteTracker;
+  readonly shared: SharedRuntime;
+  /** The client `trackPrisma` was given: each interactive transaction begins on its own extension of it. */
+  readonly base: ExtendableClient;
+  /** The client with the root client's hook: array-form transactions begin on it. */
+  readonly hooked: ExtendedClient;
+}
+
+/** Takes `frame` off its lineage: the innermost frame, unless savepoints were begun side by side. */
+function leave(lineage: Lineage, frame: TransactionFrame): void {
+  const index = lineage.lastIndexOf(frame);
+  if (index !== -1) {
+    lineage.splice(index, 1);
+  }
+}
+
+/** Awaits a transaction, then takes its frame off `lineage` and commits or rolls the frame back. */
+async function settled(
+  frame: TransactionFrame,
+  lineage: Lineage,
+  run: () => Promise<unknown>,
 ): Promise<unknown> {
-  const interactive = typeof arg === "function";
-  const frame = tracker.openTransaction(interactive ? "interactive" : "batch");
+  let result: unknown;
   try {
-    const result = interactive
-      ? await hooked.$transaction((client: unknown) => {
-          frame.setClient(client);
-          return frame.run(() => (arg as (client: unknown) => unknown)(client));
-        }, options)
-      : await frame.run(() => hooked.$transaction(arg, options));
-    frame.commit();
-    return result;
+    result = await run();
   } catch (error) {
+    leave(lineage, frame);
     frame.rollback();
     throw error;
   }
+  leave(lineage, frame);
+  frame.commit();
+  return result;
+}
+
+/**
+ * An array-form transaction, begun on `client`. Prisma runs it as a
+ * transaction of its own, wherever it is begun, so its frame commits on its
+ * own: the root client's operations in it are its own, while one made on a
+ * transaction's client runs in that transaction all the same (the hook
+ * awaits it there) and is recorded there.
+ */
+async function batch(
+  tracker: WriteTracker,
+  client: ExtendedClient,
+  arg: unknown,
+  options: unknown,
+): Promise<unknown> {
+  const frame = tracker.openTransaction("batch");
+  return await settled(frame, [], () => frame.run(() => client.$transaction(arg, options)));
+}
+
+/**
+ * An interactive transaction's client as its callback gets it: Prisma's own,
+ * except that its `$transaction` goes through {@link nestedTransaction}, in
+ * `lineage`. A client without `$transaction` is handed on as it is.
+ */
+function nestable(tracker: WriteTracker, client: unknown, lineage: Lineage): unknown {
+  if (
+    (typeof client !== "object" && typeof client !== "function") ||
+    client === null ||
+    typeof Reflect.get(client, "$transaction") !== "function"
+  ) {
+    return client;
+  }
+  const own = client as ExtendedClient;
+  return new Proxy(own, {
+    get(target, property) {
+      return property === "$transaction"
+        ? (arg: unknown, options?: unknown) =>
+            nestedTransaction(tracker, own, lineage, arg, options)
+        : Reflect.get(target, property);
+    },
+  });
+}
+
+/**
+ * `tx.$transaction` on a transaction's client. The interactive form is a
+ * savepoint of that transaction (Prisma 7), so its frame nests in the
+ * innermost open one of `lineage`: its writes join that one's when it
+ * commits, and are dropped when it rolls back; the client its callback gets
+ * is wrapped the same way, so savepoints nest. The array form is a
+ * transaction of its own ({@link batch}).
+ */
+async function nestedTransaction(
+  tracker: WriteTracker,
+  own: ExtendedClient,
+  lineage: Lineage,
+  arg: unknown,
+  options: unknown,
+): Promise<unknown> {
+  if (typeof arg !== "function") {
+    return await batch(tracker, own, arg, options);
+  }
+  const around = lineage.at(-1);
+  if (around === undefined) {
+    // The transaction ended: Prisma refuses this, as it would untracked.
+    return await own.$transaction(arg, options);
+  }
+  const frame = around.nest();
+  return await settled(frame, lineage, () =>
+    own.$transaction((inner: unknown) => {
+      frame.setClient(inner);
+      lineage.push(frame);
+      return frame.run(() =>
+        (arg as (client: unknown) => unknown)(nestable(tracker, inner, lineage)),
+      );
+    }, options),
+  );
+}
+
+/**
+ * `db.$transaction`, in both forms: a transaction begun on the root client,
+ * which commits on its own. The interactive form begins on a client of its
+ * own, the hook over its lineage's runtime extending the client `trackPrisma`
+ * was given, so the operations of its client and of its savepoints' are told
+ * from every other transaction's, wherever they run (`transactionRuntime`).
+ */
+async function rootTransaction(
+  settings: TransactionSettings,
+  arg: unknown,
+  options: unknown,
+): Promise<unknown> {
+  const { tracker } = settings;
+  if (typeof arg !== "function") {
+    return await batch(tracker, settings.hooked, arg, options);
+  }
+  const lineage: Lineage = [];
+  const client = settings.base.$extends({
+    name: "quickdraw-tracking-transaction",
+    query: { $allOperations: createHook(transactionRuntime(settings.shared, lineage)) },
+  });
+  const frame = tracker.openTransaction("interactive");
+  return await settled(frame, lineage, () =>
+    client.$transaction((tx: unknown) => {
+      frame.setClient(tx);
+      lineage.push(frame);
+      return frame.run(() => (arg as (client: unknown) => unknown)(nestable(tracker, tx, lineage)));
+    }, options),
+  );
 }
 
 /**
@@ -294,12 +499,20 @@ function createStorage(
  * `db: Tracked<Db>` (or `TrackedTransaction<Db>`, which a transaction's `tx`
  * is too) and the compiler refuses the untracked client there.
  *
- * Prefer interactive transactions (`db.$transaction(async (tx) => ...)`). An
- * array-form `db.$transaction([...])` has no transaction client, so the rows
- * a `deleteMany` or `updateMany` there reads first (and an `update`'s old
- * values) are read on the root client, outside the batch: rows the batch's
- * earlier statements created or changed may be missed, and their frames
- * with them. A development warning names the model and operation once.
+ * Prefer interactive transactions (`db.$transaction(async (tx) => ...)`). One
+ * nested in it (`tx.$transaction(async (inner) => ...)`, a savepoint) is
+ * tracked the same way: its writes join the transaction around it when it
+ * commits, and are dropped when it rolls back, whatever the transaction
+ * around it does next. Work on `db` inside one runs outside it, as Prisma
+ * runs it, and is tracked so: its writes (and those of a `db.$transaction`
+ * begun there, either form) are sent whether or not the transaction
+ * commits, while `tx`'s writes go to `tx`'s transaction wherever `tx` is
+ * used. An array-form `db.$transaction([...])` has no transaction client,
+ * so the rows a `deleteMany` or `updateMany` there reads first (and an
+ * `update`'s old values) are read on the root client, outside the batch:
+ * rows the batch's earlier statements created or changed may be missed,
+ * and their frames with them. A development warning names the model and
+ * operation once.
  *
  * @example
  * export const db = trackPrisma(new PrismaClient({ adapter }));
@@ -321,28 +534,29 @@ export function trackPrisma<C extends PrismaClientLike>(
     development: options.development,
   });
   const interest = createInterestRegistry(options.interest);
-  // The client with the hook; the hook's own reads use it outside transactions.
+  // The client with the root client's hook; its reads run outside transactions.
   let root: ExtendedClient | undefined;
+  // The framework's own reads: through the open interactive transaction, else the root client.
   const delegate = (model: string): Delegate =>
     delegateOf(tracker.transactionClient() ?? root, model);
   const links = createLinkRegistry();
-  const runtime: Runtime = {
+  const shared: SharedRuntime = {
     tracker,
-    delegate,
     interestOf: interest.of,
     linksOf: links.of,
     untracked: new Set(),
   };
   const hooked = client.$extends({
     name: "quickdraw-tracking",
-    query: { $allOperations: createHook(runtime) },
+    query: { $allOperations: createHook(rootRuntime(shared, () => root)) },
   });
   root = hooked;
+  const settings: TransactionSettings = { tracker, shared, base: client, hooked };
   const tracked = hooked.$extends({
     name: "quickdraw-transactions",
     client: {
       $transaction: (arg: unknown, txOptions?: unknown) =>
-        transaction(tracker, hooked, arg, txOptions),
+        rootTransaction(settings, arg, txOptions),
       [STORAGE_KEY]: createStorage(tracker, [interest, links], delegate, prismaSchemaOf(client)),
     },
   });

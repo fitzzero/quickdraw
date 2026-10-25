@@ -19,6 +19,10 @@
 //   closes stdin still gets every reply), while `close()` and a broken
 //   stream cancel the calls in flight instead.
 //
+// The JSON-RPC handling is the core the Streamable HTTP endpoint shares
+// (`jsonRpc.ts`); what is the stdio server's own is the session, the calls
+// in flight and their cancel, and the protocol version, which stays 4.1's.
+//
 // Anything else that writes to stdout corrupts the protocol, so start the
 // server through `bootstrapMcpServer`, which sends console output to stderr.
 
@@ -26,12 +30,23 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { Logger } from "../../contract/logger";
-import { INTERNAL_MESSAGE, QuickdrawError } from "../../protocol/errors";
 import { describeError } from "../pipeline/metrics";
+import {
+  classify,
+  errorResponse,
+  handleMessage,
+  INVALID_REQUEST,
+  isRecord,
+  isRequestId,
+  PARSE_ERROR,
+  toolResponse,
+  type JsonRpcPeer,
+  type JsonRpcResponse,
+  type RequestId,
+} from "./jsonRpc";
 import type { McpRegistry } from "./registry";
-import { toToolResult } from "./result";
 import { stderrLogger } from "./stderr";
-import type { McpCallResult, McpStdioRequest } from "./types";
+import type { McpStdioRequest } from "./types";
 
 /** The MCP protocol version the stdio server speaks: 4.1's. */
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -66,14 +81,10 @@ export interface McpStdioServer {
   close(): Promise<void>;
 }
 
-type RequestId = string | number;
-
-interface Session {
-  readonly registry: McpRegistry;
-  readonly serverInfo: { readonly name: string; readonly version: string };
+/** A stdio session: the core's peer, with the calls it has in flight. */
+interface Session extends JsonRpcPeer {
   readonly request: McpStdioRequest;
   readonly output: Writable;
-  readonly logger: Logger;
   /** The `tools/call` requests in flight, by id, so they can be cancelled. */
   readonly calls: Map<RequestId, AbortController>;
   /** Every message still being handled. */
@@ -82,28 +93,10 @@ interface Session {
   writable: boolean;
 }
 
-const PARSE_ERROR = -32700;
-const INVALID_REQUEST = -32600;
-const METHOD_NOT_FOUND = -32601;
-const INVALID_PARAMS = -32602;
 const CATEGORY = "quickdraw.mcp";
 
-const INTERNAL_FAILURE: McpCallResult = Object.freeze({
-  ok: false,
-  error: new QuickdrawError("INTERNAL", INTERNAL_MESSAGE),
-});
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** MCP request ids are strings or numbers, never `null`. */
-function isRequestId(value: unknown): value is RequestId {
-  return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
-}
-
 /** Writes one message as one line; returns its size in bytes. */
-function write(session: Session, message: object): number | undefined {
+function write(session: Session, message: JsonRpcResponse): number | undefined {
   if (!session.writable) {
     return undefined;
   }
@@ -112,47 +105,17 @@ function write(session: Session, message: object): number | undefined {
   return Buffer.byteLength(line);
 }
 
-function reply(session: Session, id: RequestId, result: unknown): number | undefined {
-  return write(session, { jsonrpc: "2.0", id, result });
-}
-
-function replyError(session: Session, id: RequestId | null, code: number, message: string): void {
-  write(session, { jsonrpc: "2.0", id, error: { code, message } });
-}
-
-function replyToolResult(
+/** Calls a tool for request `id`, which `notifications/cancelled` can stop. */
+async function callTool(
   session: Session,
   id: RequestId,
-  result: McpCallResult,
-): number | undefined {
-  let content: unknown;
-  try {
-    content = toToolResult(result);
-  } catch (error) {
-    session.logger.error(
-      "A tool's value could not be written as JSON; it was answered with INTERNAL",
-      {
-        category: CATEGORY,
-        error: describeError(error),
-      },
-    );
-    content = toToolResult(INTERNAL_FAILURE);
-  }
-  return reply(session, id, content);
-}
-
-async function callTool(session: Session, id: RequestId, params: unknown): Promise<void> {
-  if (!isRecord(params) || typeof params.name !== "string") {
-    replyError(session, id, INVALID_PARAMS, "tools/call needs params { name, arguments? }");
-    return;
-  }
-  const { name } = params;
-  if (!session.registry.has(name)) {
-    replyError(session, id, INVALID_PARAMS, `Unknown tool: ${name}`);
-    return;
-  }
+  name: string,
+  args: unknown,
+): Promise<void> {
   if (session.calls.has(id)) {
-    replyError(session, id, INVALID_REQUEST, `Request ${JSON.stringify(id)} is already in flight`);
+    session.send(
+      errorResponse(id, INVALID_REQUEST, `Request ${JSON.stringify(id)} is already in flight`),
+    );
     return;
   }
   const controller = new AbortController();
@@ -163,45 +126,19 @@ async function callTool(session: Session, id: RequestId, params: unknown): Promi
     }
   };
   try {
-    await session.registry.call(name, params.arguments, {
+    await session.registry.call(name, args, {
       request: session.request,
       signal: controller.signal,
       respond: (result) => {
         release();
         // A cancelled call gets no reply, nor does one whose session ended.
-        return controller.signal.aborted ? undefined : replyToolResult(session, id, result);
+        return controller.signal.aborted
+          ? undefined
+          : session.send(toolResponse(session.logger, id, result));
       },
     });
   } finally {
     release();
-  }
-}
-
-async function onRequest(
-  session: Session,
-  id: RequestId,
-  method: string,
-  params: unknown,
-): Promise<void> {
-  switch (method) {
-    case "initialize":
-      reply(session, id, {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        serverInfo: session.serverInfo,
-        capabilities: { tools: {} },
-      });
-      return;
-    case "ping":
-      reply(session, id, {});
-      return;
-    case "tools/list":
-      reply(session, id, { tools: session.registry.tools });
-      return;
-    case "tools/call":
-      await callTool(session, id, params);
-      return;
-    default:
-      replyError(session, id, METHOD_NOT_FOUND, `Method not found: ${method}`);
   }
 }
 
@@ -228,30 +165,10 @@ async function onLine(session: Session, line: string): Promise<void> {
   }
   const message = parse(line);
   if (message === UNPARSABLE) {
-    replyError(session, null, PARSE_ERROR, "Parse error");
+    session.send(errorResponse(null, PARSE_ERROR, "Parse error"));
     return;
   }
-  if (!isRecord(message)) {
-    replyError(session, null, INVALID_REQUEST, "Invalid Request");
-    return;
-  }
-  const { id, method, params } = message;
-  if (typeof method !== "string") {
-    // A response to a request this server never sends: answering it could loop.
-    if (!("result" in message) && !("error" in message)) {
-      replyError(session, isRequestId(id) ? id : null, INVALID_REQUEST, "Invalid Request");
-    }
-    return;
-  }
-  if (id === undefined) {
-    onNotification(session, method, params);
-    return;
-  }
-  if (!isRequestId(id)) {
-    replyError(session, null, INVALID_REQUEST, "Invalid Request");
-    return;
-  }
-  await onRequest(session, id, method, params);
+  await handleMessage(session, classify(message));
 }
 
 /** Handles one message, keeping track of it until it is done. */
@@ -277,16 +194,21 @@ function openSession(options: McpStdioServerOptions): Session {
   if (typeof options.name !== "string" || typeof options.version !== "string") {
     throw new TypeError("createMcpStdioServer: name and version must be strings, for serverInfo");
   }
-  return {
+  const session: Session = {
     registry: options.registry,
     serverInfo: Object.freeze({ name: options.name, version: options.version }),
+    logger: options.logger ?? stderrLogger,
+    protocolVersion: () => MCP_PROTOCOL_VERSION,
+    send: (response) => write(session, response),
+    callTool: (id, name, args) => callTool(session, id, name, args),
+    notify: (method, params) => onNotification(session, method, params),
     request: Object.freeze({ transport: "stdio", sessionId: randomUUID() }),
     output: options.output ?? process.stdout,
-    logger: options.logger ?? stderrLogger,
     calls: new Map(),
     pending: new Set(),
     writable: true,
   };
+  return session;
 }
 
 /**

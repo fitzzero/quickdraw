@@ -18,8 +18,10 @@
 // The time limit starts once the call is admitted (after step 2) and covers
 // steps 3 to 8; a query's cancel signal does too. Either answers the caller
 // at once, and work already started (a slow access check, a handler that
-// ignores its signal) runs on unanswered. A query keeps its slot until that
-// work has settled, so a connection never runs more of it than its cap.
+// ignores its signal) runs on unanswered: what such a handler writes still
+// commits, and is flushed when it settles (`flushRun` warns about it after
+// `TIMEOUT`). A query keeps its slot until that work has settled, so a
+// connection never runs more of it than its cap.
 
 import { checkKindAndClaims } from "../access/claims";
 import { createConcurrencyLimiter, type ConcurrencyLimiter, type QuerySlot } from "./concurrency";
@@ -73,6 +75,13 @@ interface CallState extends ExecuteCall {
   stageWork: Promise<unknown> | undefined;
   /** The shared copy the call's data is, handed to `respond` with its result. */
   sharedData: SharedData | undefined;
+  /** The call's time limit, once the call is admitted. */
+  timeoutMs: number | undefined;
+  /**
+   * True once the call answered `TIMEOUT` at its own time limit (not one its
+   * handler threw): the run it started may go on, and commit, unanswered.
+   */
+  timedOut: boolean;
 }
 
 /**
@@ -164,10 +173,8 @@ async function settle(pipeline: Pipeline, call: CallState): Promise<DispatchResu
     throwIfCancelled(cancel);
     slot = await admit(pipeline.limiter, call.request, target, cancel);
     call.queueMs = slot?.queueMs ?? 0;
-    limit = startTimeLimit(
-      target.method.timeoutMs ?? pipeline.settings.limits.callTimeoutMs,
-      cancel,
-    );
+    call.timeoutMs = target.method.timeoutMs ?? pipeline.settings.limits.callTimeoutMs;
+    limit = startTimeLimit(call.timeoutMs, cancel);
     call.signal = limit.signal;
     call.expired = limit.expired;
     return await proceed(pipeline, call, target);
@@ -206,9 +213,28 @@ function respond(settings: PipelineSettings, call: CallState, result: DispatchRe
 }
 
 /**
+ * Warns, in every environment, that a call answered `TIMEOUT` while its
+ * handler went on to commit `writes`: its caller saw a failure, yet the
+ * writes are durable, and the flush pushes them.
+ */
+function warnLateWrites(settings: PipelineSettings, call: CallState, writes: number): void {
+  const { timeoutMs } = call;
+  if (!call.timedOut || timeoutMs === undefined || writes === 0) {
+    return;
+  }
+  const { service, method } = call.request;
+  settings.logger.warn(
+    `${service}.${method} answered TIMEOUT after ${timeoutMs} ms, and its handler went on to commit ${writes} ${writes === 1 ? "write" : "writes"}; set timeoutMs above its slowest path, or check ctx.signal before writing`,
+    { category: "quickdraw.call", requestId: call.requestId, service, method, timeoutMs, writes },
+  );
+}
+
+/**
  * Step 9b: flushes the run this call started, once its handler has settled.
  * A handler still running after `TIMEOUT` or `CANCELLED` is flushed when it
- * settles, without holding up this call.
+ * settles, without holding up this call; one that answered `TIMEOUT` and
+ * flushes writes is warned about (`warnLateWrites`), once per run, since
+ * only the call that started a run flushes it.
  */
 async function flushRun(settings: PipelineSettings, call: CallState): Promise<void> {
   const { run } = call;
@@ -216,6 +242,8 @@ async function flushRun(settings: PipelineSettings, call: CallState): Promise<vo
     return;
   }
   const flush = async (): Promise<void> => {
+    // Before the flush hands them to the sink, which empties the unit.
+    warnLateWrites(settings, call, run.unit.recorded ?? 0);
     try {
       await run.unit.flush();
     } catch (error) {
@@ -290,8 +318,11 @@ export function createPipeline(settings: PipelineSettings): Dispatch {
       run: undefined,
       source: undefined,
       sharedData: undefined,
+      timeoutMs: undefined,
+      timedOut: false,
     };
     const result = await settle(pipeline, call);
+    call.timedOut = !result.ok && result.error.code === "TIMEOUT" && call.expired?.aborted === true;
     const durationMs = performance.now() - startedAt;
     const bytes = respond(settings, call, result);
     await flushRun(settings, call);

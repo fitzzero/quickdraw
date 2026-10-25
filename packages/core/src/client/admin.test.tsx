@@ -167,11 +167,6 @@ describe("the kit's reads of rows", () => {
       displayName: "Tasks",
       fields: [],
     });
-    // A new answer refetches the method's cached results a few microtasks later:
-    // let that pass before mounting, so each call counted below is a mount's.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
     const view = render(<AdminReads admin={mock.task.admin} id="t1" shown />);
     await view.findByText("list: T1");
     await view.findByText("list kept 60000 ms: T1");

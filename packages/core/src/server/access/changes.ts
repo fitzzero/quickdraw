@@ -1,7 +1,8 @@
-// What tracked writes do to access (RFC 0003 sections 4.2 and 4.4): a flush
-// sink, first on the dispatcher's sink list, that evicts the cached lookups a
-// write may have changed and then tells `onAccessChanged` listeners which
-// rows' access may have changed and for whom. The revocation of live
+// What tracked writes do to access (RFC 0003 sections 4.2 and 4.4): a write
+// evictor, which evicts the cached lookups a write may have changed as soon
+// as the write is durable, and a flush sink, first on the dispatcher's sink
+// list, that evicts them again and then tells `onAccessChanged` listeners
+// which rows' access may have changed and for whom. The revocation of live
 // subscriptions (section 4.4) listens here.
 //
 // Per write, from the bindings' policies:
@@ -23,6 +24,16 @@
 // id concerns no subscription, so its report costs a lookup in an index.
 // An update that sets none of the columns a policy reads changes nothing.
 // Evictions all happen before the first listener is told.
+//
+// With `cacheMs` on, the write evictor (`storage.onWrite`) evicts what the
+// middle column says once each write is durable: a write outside any
+// transaction at once, a transaction's writes when it commits (a savepoint's
+// when the transaction around it does), a rolled-back write never. A check
+// later in the same call, or another request on this process, then reads
+// afresh instead of waiting for the call's flush after its response. The
+// evictor reports nothing: revocation and `onAccessChanged` stay at the
+// flush, whose eviction runs again and drops what was kept in between. Other
+// processes evict at the flush's broadcast (`forgetAccess`).
 
 import type { Logger } from "../../contract/logger";
 import { describeError } from "../pipeline/metrics";
@@ -56,6 +67,8 @@ type Rule =
       readonly kind: "members";
       readonly binding: Binding;
       readonly read: MembershipRead;
+      /** The columns a write must set to move a level: the read's entry, user and level. */
+      readonly columns: readonly string[];
       readonly ns: Namespace;
     };
 
@@ -79,7 +92,8 @@ function rulesByModel(bindings: ReadonlyMap<string, Binding>): Map<string, Rule[
     }
     for (const [read, ns] of binding.memberships) {
       add(binding.model, { kind: "anchor", binding, ns });
-      add(read.model, { kind: "members", binding, read, ns });
+      const columns = Object.freeze([read.entry, read.user, read.level]);
+      add(read.model, { kind: "members", binding, read, columns, ns });
     }
   }
   return rules;
@@ -144,40 +158,80 @@ class Changes {
   }
 }
 
+/**
+ * Applies `rule` to one write, in its two halves: evicts from `cache` what
+ * the write may have changed, and adds to `changes` the access change it
+ * makes. The write evictor passes no `changes`, so it builds no change (an
+ * optional call evaluates no argument); a dispatcher without `cacheMs` has
+ * no cache. One decision serves both halves, so the evictor drops exactly
+ * what the flush drops for the write.
+ */
 function apply(
   rule: Rule,
   write: WriteRecord,
   cache: AccessCache | undefined,
-  changes: Changes,
+  changes: Changes | undefined,
 ): void {
   const service = rule.binding.service.name;
   if (rule.kind === "rows") {
     if (sets(write, rule.binding.columns)) {
       cache?.evict(rule.binding.rows, "", write.id);
-      changes.add({ service, id: write.id });
+      changes?.add({ service, id: write.id });
     }
     return;
   }
   if (rule.kind === "anchor") {
     if (write.op !== "update") {
       cache?.evict(rule.ns, undefined, write.id);
-      changes.add({ service, id: write.id });
+      changes?.add({ service, id: write.id });
     }
     return;
   }
-  if (!sets(write, [rule.read.entry, rule.read.user, rule.read.level])) {
+  if (!sets(write, rule.columns)) {
     return;
   }
   const keys = membershipKeys(write, rule.read);
   if (keys === undefined) {
     cache?.evict(rule.ns);
-    changes.add({ service });
+    changes?.add({ service });
     return;
   }
   for (const [userId, id] of keys) {
     cache?.evict(rule.ns, userId, id);
-    changes.add({ service, id, userId });
+    changes?.add({ service, id, userId });
   }
+}
+
+/** Evicts what one tracked write may have changed: {@link createWriteEvictor}. */
+export type WriteEvictor = (write: WriteRecord) => void;
+
+/**
+ * The write evictor: `storage.onWrite` calls it with each tracked write once
+ * the write is durable (a transaction's at its commit, a rolled-back one
+ * never), and it evicts from `cache` what the write may have changed, as the
+ * flush sink does again after the response, reporting nothing. It runs
+ * synchronously inside the tracked client's write, so it only drops cached
+ * values (each eviction also moves its namespace's generation, so a lookup
+ * that read before the write and settles after it is not kept). `undefined`
+ * without a cache, or when no served service has a policy.
+ */
+export function createWriteEvictor(
+  bindings: ReadonlyMap<string, Binding>,
+  cache: AccessCache | undefined,
+): WriteEvictor | undefined {
+  const rules = rulesByModel(bindings);
+  if (cache === undefined || rules.size === 0) {
+    return undefined;
+  }
+  return (write) => {
+    const matched = rules.get(modelKey(write.model));
+    if (matched === undefined) {
+      return;
+    }
+    for (const rule of matched) {
+      apply(rule, write, cache, undefined);
+    }
+  };
 }
 
 async function notify(

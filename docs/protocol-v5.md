@@ -232,7 +232,7 @@ client sends an ack id.
 | `qd:unwatch`      | `WatchFrame`             | `Ok \| Failure`, when asked | Leaves a watched topic.                                                                                     |
 | `qd:stream:sub`   | `StreamSubscribe`        | `StreamSubscribeReply`      | Subscribes to a stream and receives its seed.                                                               |
 | `qd:stream:unsub` | `StreamSubscribe`        | `Ok \| Failure`, when asked | Unsubscribes from a stream.                                                                                 |
-| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, sent volatile: `[s, channel, payload]`.                                  |
+| `qd:ch`           | `ChannelFrame`           | none                        | A fire-and-forget channel message, dropped while the connection is backed up: `[s, channel, payload]`.      |
 | `qd:peer`         | `PeerSignalFrame`        | `Ok \| Failure`, when asked | A peer link's signal to another socket of an app room: `{ room, to, sig }`.                                 |
 | `qd:relay`        | `RelayFrame`             | none                        | A peer link's message for the server to relay: `[room, to, label, text]`, dropped on `fast` when backed up. |
 
@@ -259,11 +259,19 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
 
 ## What a client must do
 
-- Wait for `qd:hello` before the first call: it says who the socket acts for
-  (`userId`, `serviceAccess`) and the limits to stay within. Each hello is a
-  new socket in no app room: make the joining calls again after every one. A
-  `serverId` other than the last hello's means the server restarted (or,
-  behind a cluster, another node answered): its state starts over.
+- Wait for `qd:hello` on every socket, a reconnect's included, before any
+  call or channel message on it: it says who the socket acts for (`userId`,
+  `serviceAccess`) and the limits to stay within, and a reconnect's socket
+  may act for someone else (a session cookie can change meanwhile). Hold a
+  call made before it, and send it only if the hello names the user it was
+  made as. A client library may keep what was emitted on the last socket
+  and send it on the next one before that socket's hello (Socket.IO's
+  clients buffer what is emitted while a connection is down, and after a
+  missed ping): take the calls out of such a buffer and hold them, and drop
+  the rest. Each hello is a new socket in no app room: make the joining calls
+  again after every one. A `serverId` other than the last hello's means the
+  server restarted (or, behind a cluster, another node answered): its state
+  starts over.
 - Give each `qd:call` an `id` no call in flight on the socket has; `qd:cancel`
   names it, and the call's acknowledgement still arrives. Send it with an ack
   id: the server ignores a `qd:call` sent without one, with no reply and no
@@ -281,10 +289,12 @@ once and routes by the frame's keys (`s`, `id`, `c`, `scope`, `room`).
   `VALIDATION`.
 - Send `qd:ch` and forget it: there is no acknowledgement and no error, so
   never wait for one, and drop a message rather than queue it while the
-  connection is backed up (Socket.IO calls that volatile). The server drops
-  a message silently when it is over the channel's rate, fails its schema,
-  or fails its `requires`, and ends the socket of a client that keeps
-  sending far over a channel's rate (below).
+  connection is backed up: not Socket.IO's volatile flag, which drops a
+  message whenever a write is in flight, so of the messages sent in one
+  tick it keeps only the first. The server drops a message silently when
+  it is over the channel's rate, fails its schema, or fails its
+  `requires`, and ends the socket of a client that keeps sending far over
+  a channel's rate (below).
 - Apply `qd:e` and `qd:c` frames by `rev`, not by arrival: behind a
   cluster, frames from two nodes can arrive out of order.
 - App rooms are per socket. A method joins the socket that called it
@@ -348,12 +358,12 @@ offer: its peer moves to the relay on hearing it.
    it and heard it. Through the relay a `PeerMessage` travels as the
    `text` of `qd:relay`. On `fast`, drop one rather than queue it
    while your connection is backed up; the server drops one while the
-   receiver's is (`PEER_RELAY_FAST_BACKLOG` relay messages waiting). A
-   side whose direct path lost a data channel (it closed, rather than ICE
-   failing) waits `BYE_WAIT_MS` for the peer's bye before it says
-   `{ relay: true }`: a peer that closes its link closes its data
-   channels too, and a `{ relay: true }` it hears after that asks it for
-   a new link.
+   receiver's is (`PEER_RELAY_FAST_BACKLOG` relay messages and volatile
+   stream frames waiting). A side whose direct path lost a data channel
+   (it closed, rather than ICE failing) waits `BYE_WAIT_MS` for the
+   peer's bye before it says `{ relay: true }`: a peer that closes its
+   link closes its data channels too, and a `{ relay: true }` it hears
+   after that asks it for a new link.
 4. Read link messages from both paths all along: the peer may move to the
    relay before you hear it say so. A link that opens on no path within
    `OPEN_TIMEOUT_MS` is over.
@@ -884,7 +894,10 @@ One of:
 no key names: `scope` is `null` for a global stream. The positions are
 fixed; a later revision may append elements after `item`, never insert
 them, so a client reads the four it knows and ignores the rest. Before
-`5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`.
+`5.0.0-rc.4` it was the object `{ s, stream, scope?, item }`. A volatile
+stream's frame is dropped for a socket while its connection is backed up
+(`PEER_RELAY_FAST_BACKLOG` messages waiting for it): not Socket.IO's
+volatile flag, which drops a message whenever a write is in flight.
 
 A JSON array:
 
@@ -897,9 +910,11 @@ A JSON array:
 
 #### `ChannelFrame`
 
-`qd:ch`, sent volatile and never acknowledged: `[service, channel,
-payload]`. A later revision may append elements after `payload`; the
-server reads the three it knows and ignores the rest.
+`qd:ch`, never acknowledged: `[service, channel, payload]`. A client drops
+a message rather than queue it while its connection is backed up: not
+Socket.IO's volatile flag, which drops a message whenever a write is in
+flight. A later revision may append elements after `payload`; the server
+reads the three it knows and ignores the rest.
 
 A JSON array:
 
@@ -1241,17 +1256,17 @@ A refused acknowledgement is `Failure`: `{ ok: false, e }`, with `e` a
 `WireError`. Its code, and the HTTP status the HTTP transport answers the
 same failure with:
 
-| Code              | HTTP | Meaning                                                 |
-| ----------------- | ---- | ------------------------------------------------------- |
-| `UNAUTHENTICATED` | 401  | there is no principal.                                  |
-| `FORBIDDEN`       | 403  | access was denied.                                      |
-| `NOT_FOUND`       | 404  | an unknown service, method or row.                      |
-| `CONFLICT`        | 409  | a unique or state conflict.                             |
-| `VALIDATION`      | 422  | the input failed its schema; see `ValidationErrorData`. |
-| `RATE_LIMITED`    | 429  | a limiter or a full queue; see `RateLimitedErrorData`.  |
-| `CANCELLED`       | 499  | the caller cancelled.                                   |
-| `TIMEOUT`         | 504  | the handler ran past its time limit.                    |
-| `INTERNAL`        | 500  | anything else.                                          |
+| Code              | HTTP | Meaning                                                                        |
+| ----------------- | ---- | ------------------------------------------------------------------------------ |
+| `UNAUTHENTICATED` | 401  | there is no principal.                                                         |
+| `FORBIDDEN`       | 403  | access was denied.                                                             |
+| `NOT_FOUND`       | 404  | an unknown service, method or row.                                             |
+| `CONFLICT`        | 409  | a unique or state conflict.                                                    |
+| `VALIDATION`      | 422  | the input failed its schema; see `ValidationErrorData`.                        |
+| `RATE_LIMITED`    | 429  | a limiter or a full queue; see `RateLimitedErrorData`.                         |
+| `CANCELLED`       | 499  | the caller cancelled.                                                          |
+| `TIMEOUT`         | 504  | the server stopped waiting; the handler may still commit (an unknown outcome). |
+| `INTERNAL`        | 500  | anything else.                                                                 |
 
 An `INTERNAL` error always carries the message `"Internal error"` and no `data`, whatever failed on the server.
 
@@ -1347,7 +1362,7 @@ peer links, which announces them in `limits.peers`.
 | `PEER_RELAY_BURST`            | 240 messages                              | Relay messages one socket may send to one peer at once, after a pause.                                    |
 | `PEER_RELAY_BYTES_PER_SECOND` | 1048576 bytes a second per socket         | Relay bytes one socket may send per second, to all its peers together; more are dropped.                  |
 | `PEER_RELAY_BYTES_BURST`      | 2097152 bytes                             | Relay bytes one socket may send at once, after a pause.                                                   |
-| `PEER_RELAY_FAST_BACKLOG`     | 64 relay messages waiting                 | Relay messages waiting for a socket's connection past which the relay drops a `fast` one to it.           |
+| `PEER_RELAY_FAST_BACKLOG`     | 64 messages waiting                       | Relay messages and volatile frames waiting for a socket past which a `fast` or volatile one is dropped.   |
 
 These are defaults. An app changes the socket rate limiter with
 `createServer({ rateLimit })` and a channel's rate with its contract's

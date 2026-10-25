@@ -13,6 +13,7 @@ import { byIdSchema, cuidSchema, paginationSchema } from "./shared/schemas.js";
 import { requireAuth } from "./shared/guards.js";
 import { registerProjectLimits } from "./project-methods/limits.js";
 import { deleteProjectSchema } from "./project-schemas.js";
+import { clearProjectAcl, removeProjectMembers, writeProjectAcl } from "./shared/writers.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
@@ -197,6 +198,7 @@ export class ProjectService extends BaseService<
     // Archive: tell everyone watching the project room
     this.defineMethod("archiveProject", "Moderate", async (payload, _ctx) => {
       await this.update(payload.id, { archived: true });
+      await removeProjectMembers(this.prisma, payload.id);
       this.emitToRoom(serviceRoom("projectService", payload.id), "project:archived", {
         id: payload.id,
       });
@@ -207,6 +209,7 @@ export class ProjectService extends BaseService<
       "deleteProject",
       "Admin",
       async (payload, ctx) => {
+        await clearProjectAcl(this.prisma, payload.id);
         const deleted = await this.delete(payload.id);
         if (!deleted) throw new Error("Project not found");
         if (ctx.userId) {
@@ -255,10 +258,7 @@ export class ProjectService extends BaseService<
             (entry) => entry.userId !== payload.userId,
           );
           acl.push({ userId: payload.userId, level: payload.level });
-          await tx.project.update({
-            where: { id: payload.id },
-            data: { acl: acl as unknown as Prisma.InputJsonValue },
-          });
+          await writeProjectAcl(tx, payload.id, acl as unknown as Prisma.InputJsonValue);
         });
         return { id: payload.id };
       },

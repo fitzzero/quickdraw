@@ -3,7 +3,7 @@
 // The mutation hook behind `qd.<service>.<method>.useMutation` (RFC 0003
 // sections 11.2 and 11.4), TanStack Query's own `useMutation` keyed by
 // `keys.ts` and calling through `call.ts`; `hooks.ts` exports it with the
-// query hook. It returns TanStack's mutation result as it is, typed with
+// query hook. It returns TanStack's mutation result, typed with
 // `QuickdrawError`, and is optimistic by default when its input has `id` and
 // its output is `"entity"` (`optimistic.ts`). A failed call's refused items
 // show in the render that shows the mutation's error, and their `retry()`
@@ -11,12 +11,12 @@
 // callbacks follow it (finding F8.3). In development, one hook instance
 // issuing its mutation more than 5 times within a second is named as a
 // loop, with its component (`loopGuard.ts`).
+//
+// Each call is made under quickdraw's rules for whom a call is made as
+// (`userMutation.ts`): bound to the user it is made as, checked at every
+// attempt, and shown only to that user.
 
-import {
-  useMutation,
-  type UseMutationOptions,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import type { UseMutationResult } from "@tanstack/react-query";
 import { useRef } from "react";
 import type { QuickdrawError } from "../protocol/errors";
 import { callData, isNotModified } from "./call";
@@ -24,8 +24,13 @@ import { useQuickdrawContext } from "./context";
 import { methodKeyPrefix } from "./keys";
 import { createMutationTrace, loopGuardOf, type MutationTrace } from "./loopGuard";
 import type { MethodTarget } from "./members";
-import type { OptimisticCache, OptimisticUpdate } from "./optimistic";
-import { applyWhenMutationFails, mutateOptimistically } from "./optimisticCall";
+import {
+  applyWhenMutationFails,
+  mutateOptimistically,
+  type OptimisticCache,
+  type OptimisticUpdate,
+} from "./optimisticCall";
+import { useUserMutation, type UserMutation, type UserMutationOptions } from "./userMutation";
 
 /**
  * Options of a mutation hook: TanStack's `useMutation` options, without the
@@ -36,7 +41,7 @@ export type MethodMutationOptions<
   Variables,
   Context = unknown,
   Cache = OptimisticCache,
-> = Omit<UseMutationOptions<Output, QuickdrawError, Variables, Context>, "mutationFn"> & {
+> = UserMutationOptions<Output, Variables, Context> & {
   /**
    * The mutation's optimistic update (RFC 0003 section 11.4): `false` for
    * none, or a function that writes its own layers through `cache`. Left
@@ -51,7 +56,8 @@ export type MethodMutationOptions<
 /**
  * `qd.<service>.<method>.useMutation(options)`. `mutate` returns nothing (a
  * failure lands in the result's `error`); `mutateAsync` returns the promise
- * of the output, which rejects with the `QuickdrawError`.
+ * of the output, which rejects with the `QuickdrawError`. The result shows a
+ * call only to the user it ran as (see the top of this file).
  */
 export function useMethodMutation<Output, Variables, Context = unknown, Cache = OptimisticCache>(
   target: MethodTarget,
@@ -71,11 +77,12 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
     collections: target.collections,
   };
   // The hook's own mutate, so a refused item's retry() goes through it (finding F8.3).
-  const resend = useRef<((input: Variables) => Promise<Output>) | undefined>(undefined);
-  const mutation = useMutation<Output, QuickdrawError, Variables, Context>({
-    mutationKey: methodKeyPrefix(target.service, target.method),
-    ...rest,
-    mutationFn: (input: Variables) => {
+  const resend = useRef<UserMutation<Output, Variables, Context>["sendAs"]>(undefined);
+  const { result, sendAs } = useUserMutation<Output, Variables, Context>(
+    connection,
+    queryClient,
+    { mutationKey: methodKeyPrefix(target.service, target.method), ...rest },
+    (input, ticket) => {
       loopGuardOf(queryClient).mutated(trace, target.service, target.method);
       return mutateOptimistically<Output>(
         queryClient,
@@ -88,21 +95,21 @@ export function useMethodMutation<Output, Variables, Context = unknown, Cache = 
             method: target.method,
             input,
             kind: "mutation",
-            onReply: (result) => {
-              if (!isNotModified(result)) {
-                replied(result.d as Output);
+            onReply: (reply) => {
+              if (!isNotModified(reply)) {
+                replied(reply.d as Output);
               }
             },
           }),
         {
-          resend: async () => await resend.current?.(input),
+          resend: async () => await resend.current?.(input, ticket),
           onFailed: (apply) => {
             applyWhenMutationFails(queryClient, input, apply);
           },
         },
       );
     },
-  });
-  resend.current = mutation.mutateAsync;
-  return mutation;
+  );
+  resend.current = sendAs;
+  return result;
 }

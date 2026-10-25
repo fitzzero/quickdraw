@@ -69,8 +69,14 @@ export async function issueSession(
   if (typeof session?.id !== "string" || session.id === "" || session.userId !== userId) {
     throw new TypeError("SessionStore.create must return the session it created, with its id");
   }
-  const seconds = Math.max(1, Math.ceil(ttlMs / 1000));
-  const token = await createJWT({ userId, sid: session.id }, keys.jwtSecret, `${seconds}s`);
+  // The token expires with its session, at its `expiresAt` rounded up to the
+  // second a JWT counts in. A span (`${n}s`) counts from the current whole
+  // second, so the token ended up to 999 ms before the session.
+  const token = await createJWT(
+    { userId, sid: session.id },
+    keys.jwtSecret,
+    Math.ceil(expiresAt.getTime() / 1000),
+  );
   return { session: session as AuthSession, token };
 }
 

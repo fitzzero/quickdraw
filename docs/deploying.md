@@ -97,7 +97,7 @@ goes degraded, and ignored, with one error logged. The tags have limits:
   that both keep the default prefix are one deployment to quickdraw;
 - the adapter itself still carries room broadcasts (frames, events),
   `qd:rotate`, its remote room operations (taking sockets out of a room) and
-  `fetchSockets` (presence's fallback) to every node on its key, so two
+  `fetchSockets` to every node on its key, so two
   deployments that share an adapter key still reach each other's sockets:
   give each its own key;
 - a node of an earlier version sends events without a deployment, which
@@ -114,12 +114,16 @@ hear each other during that deploy (frames, access changes, logout
 everywhere, presence). Pass `keyPrefix: "socket.io"` to `setupRedisAdapter`
 for that deploy, and move to the new key in a deploy that replaces every
 node at once. The counter key `{keyPrefix}:rev` does not change, so
-revisions stay one order across the deploy. A node of the earlier version
-never answers a presence request: while one is up, presence waits
-`cluster.timeoutMs` once and then reads every node's sockets for 30 s at a
-time ("When a node stops answering"). A node of a version without a
-stream's subscriber count answers that request `null`, or not at all: its
-sockets count as 0 until it is replaced.
+revisions stay one order across the deploy. A node of a version before
+5.1.1 never answers a presence request: while one is up, a presence read
+across nodes waits for its deadline and counts the other nodes' answers, so
+that node's users are missing from presence until it is replaced ("When a
+node stops answering"). Behind an adapter that has no request timeout to
+wait for (neither a `requestsTimeout` nor socket.io-adapter's cluster
+adapter's fixed 5 s), no other node's users are counted either while it is
+up. A node of a version without a stream's subscriber
+count answers that request `null`, or not at all: its sockets count as 0
+until it is replaced.
 
 ## What holds across nodes
 
@@ -208,6 +212,24 @@ sockets count as 0 until it is replaced.
   database, a shared store), not one node's memory. An item another node
   pushed around the moment of subscribing may then arrive both in the seed
   and as a frame: make such items idempotent (a tick, an id).
+- **Volatile streams.** A push to a `volatile` stream goes to every node the
+  same way, with a seed or without, and each node sends the items to its
+  own subscribers, skipping a socket while 64 relay messages and volatile
+  frames sent to it wait on its connection: only the node that holds a
+  socket knows its backlog. A node of an earlier version, during a rolling
+  deploy, still sends through the adapter's room broadcast with Socket.IO's
+  volatile flag, which drops an item whenever a write to the socket is in
+  flight. Both kinds of push go as a server-side event, which the Redis
+  adapter sends as JSON: on a server that sends binary (`binary: true`),
+  each binary value of the items goes beside them, in base64, and every
+  node of this version puts it back, so its subscribers and its seed get it
+  as binary. During a rolling deploy a node of an earlier version does
+  not: it reads `null` where each binary value was in a push from a node of
+  this version, sends that `null` to its subscribers and keeps it in its
+  seed, until it runs this version too. (From a seeded stream's push it
+  used to read the JSON form, `{ type: "Buffer", data: [...] }` for a
+  `Buffer`; a volatile stream's items reached it through the room
+  broadcast.)
 - **Room hosts.** Every node knows each app room's host (host mode,
   `ctx.rooms.setHost`): each change goes to every node, and a node that
   starts asks the others for the hosts their sockets are, wired with
@@ -215,9 +237,10 @@ sockets count as 0 until it is replaced.
   nodes it waits for when asked, so the node asks once the adapter's
   subscribing connection answered a PING sent after its subscriptions; with
   an adapter that has no such client it asks again `cluster.timeoutMs` after
-  the first answer. A node that dies without closing its sockets leaves the
-  hosts it held recorded on the others until each room's host is set or
-  cleared again.
+  the first answer. While one node does not answer, the node takes the
+  hosts of the nodes that did ("When a node stops answering"). A node that
+  dies without closing its sockets leaves the hosts it held recorded on the
+  others until each room's host is set or cleared again.
 - **Collections.** A removal a write cannot address to a scope (a
   `ctx.touch(..., { removed: true })`, junction rows a cascade removed
   without their entry's tracked delete) is broadcast, so every node's
@@ -296,29 +319,43 @@ kept from them (a field above their new level, a row they lost) until that
 node applies it. Live frames are fail-open across nodes for that long; calls
 and subscription reads are always authorized on the node that serves them.
 
-Presence has its own fallback. A presence request a node does not answer
-within `cluster.timeoutMs` (a node of an earlier version, during a rolling
-deploy, never answers one) makes the asking node read every node's sockets
-(`fetchSockets`) instead, for every presence read of the next 30 s, and log
-a warning ("A node did not answer a presence request within
-cluster.timeoutMs ..."), for the first window of an episode and at most
-once every 10 minutes. The first read after each window asks again, so a
-rolling deploy costs one `cluster.timeoutMs` wait per 30 s, never a
-failure. The fallback counts what earlier versions counted: a socket a raw
-`socket.join` put in the room, and, on an adapter key another deployment
-shares, that deployment's sockets. An adapter that does not answer
-server-side events (one built on the in-memory adapter) costs the same
-wait per window.
+Presence reads, a stream's subscriber count and a starting node's ask for
+the room hosts keep the answers that came. Socket.IO hands a request's
+answers over together: while one node does not answer, the other nodes'
+answers arrive only with the adapter's own request timeout, which hands
+over those that came. So such a request waits for that timeout plus
+250 ms, and counts what came: the silent node's users, sockets and hosts
+are missing, the other nodes' are not, and nothing throws.
 
-A stream's subscriber count has no fallback: an answer that does not arrive
-within `cluster.timeoutMs` counts as 0, and the count never throws. It logs
-a warning ("A node did not answer a stream's subscriber count within
-cluster.timeoutMs ...") at most once every 10 minutes. Socket.IO hands the
-other nodes' answers over together, so while one node is silent the others'
-counts are lost too, unless the adapter's own request timeout
-(`requestsTimeout`), which keeps the answers that arrived, comes first. A
-job that skips idle work counts again on its next round, and the sockets of
-a node that stopped answering get nothing on time anyway.
+- `setupRedisAdapter` builds its adapter with `requestsTimeout` set to
+  `cluster.timeoutMs` (its `requestsTimeout` option sets another), so a read
+  in a degraded cluster takes about `cluster.timeoutMs`.
+- An adapter the app built itself (`socket.adapter`, or `io.adapter(...)`)
+  keeps its own `requestsTimeout`, which quickdraw never changes. The Redis
+  adapter's default, 5,000 ms, makes such a read take about 5.25 s; lower it
+  (`createAdapter(pub, sub, { key, requestsTimeout: 1000 })`) for faster
+  answers in a degraded cluster. It also bounds the app's own
+  `fetchSockets`.
+- An adapter built on socket.io-adapter's cluster adapter (the sharded
+  Redis, streams, Postgres and Mongo adapters) exposes no `requestsTimeout`:
+  it times requests out after a fixed 5 s and hands over what came then, so
+  such a read takes about 5.25 s.
+- Any other adapter with no `requestsTimeout` is waited `cluster.timeoutMs`,
+  and a request that one node leaves unanswered then counts no other
+  node's answers.
+
+Each logs a warning saying how many nodes answered ("A node did not answer
+a presence request in time: 1 other node answered ...", and the same for "a
+stream's subscriber count"), at most once every 10 minutes for each. A job
+that skips idle work counts again on its next round, and the sockets of a
+node that stopped answering get nothing on time anyway.
+
+Presence no longer reads every node's sockets (`fetchSockets`) after a
+request goes unanswered, as 5.1.1 to 5.1.3 did for 30 s at a time: that
+read waited for every node too, so while a node stayed frozen every
+presence read threw after the adapter's timeout. During a rolling deploy
+from 5.1.0 or earlier, whose nodes never answer a presence request, the
+users on those nodes are missing from presence until they are replaced.
 
 ## When Valkey stops answering
 
@@ -354,13 +391,12 @@ a node that stopped answering get nothing on time anyway.
   skew between its clock and Valkey's.
 - **Access and presence.** While the node's connection is down, its access
   changes are broadcast without waiting (they wait in the client's queue).
-  A presence read across nodes waits `cluster.timeoutMs` for the other
-  nodes' answers, and then, like every presence read of the next 30 s,
-  reads every node's sockets (`fetchSockets`). That read waits for Valkey:
-  the adapter asks it how many nodes there are before it arms its
-  `requestsTimeout`, so presence answers and the room frames that need
-  them come late, or not at all, until Valkey is back. `lastSeen` answers
-  from the node's own records.
+  A presence read across nodes waits for its deadline (the adapter's
+  `requestsTimeout` plus 250 ms, or `cluster.timeoutMs`): the adapter asks
+  Valkey how many nodes there are before it arms its own timeout, so with
+  Valkey down nothing comes back, and the read answers with this node's
+  own users once its deadline passed. `lastSeen` answers from the node's
+  own records.
 
 ## Cloud Run
 

@@ -108,8 +108,10 @@ guide's sections as the report sends you to them.
    and call, and the session cookie's `Origin` (`cookieOriginAllowed`);
    never `verifyJWT` alone, which a signed-out session still passes. It
    refuses by throwing `QuickdrawError("UNAUTHENTICATED")`, never a plain
-   `Error`, which a socket's handshake answers `INTERNAL` (an outage, which
-   the client retries, keeping the user).
+   `Error`, which the server answers `INTERNAL` on either transport (an
+   outage, which the client retries, keeping the user): the server warns
+   `[quickdraw:authenticate-threw]`, and `no-plain-error-refusal` reports
+   it.
 
 4. **Delete each marker when its item is done**, and run the codemod again:
    it changes no code a second time and rewrites the report from the markers

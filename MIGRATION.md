@@ -647,8 +647,14 @@ gets the tracked `db`, or a transaction's `tx`. `trackPrisma` returns
 type the parameter `Tracked<PrismaClient>`, or
 `TrackedTransaction<PrismaClient>` when the helper also runs inside
 `db.$transaction` (both from `@fitzzero/quickdraw-core/prisma`), and
-passing the untracked client is a type error. `no-untracked-write` reads
-that type, so the parameter may keep its name.
+passing the untracked client is a type error. The codemod types it so when
+every call it sees gives the helper the tracked client (`db`, a
+transaction's `tx`, or the parameter of another helper it types), and
+leaves it when a caller gives it anything else, when nothing in the app
+calls it (a job's entry point, say), when it is passed around rather than
+called, and when it only reads; the summary counts the helpers it typed.
+`no-untracked-write` reads that type, so the parameter may keep its name;
+it reads it only when the file imports it from quickdraw, under any name.
 
 ### `emitUpdate`, `emitCollection*` and `notifyCollections` are gone
 
@@ -1097,7 +1103,10 @@ a signed-out session still passes until its JWT expires. Its
 `authenticate` refuses credentials by throwing
 `QuickdrawError("UNAUTHENTICATED")`: anything else it throws is taken for
 the server's failure (a socket's handshake is refused `INTERNAL`, and the
-client keeps the user and connects again by itself).
+client keeps the user and connects again by itself; an HTTP call is
+answered `INTERNAL`), which the server warns about in development
+(`[quickdraw:authenticate-threw]`) and lint's `no-plain-error-refusal`
+reports.
 
 <!-- example: ../../../codemod/test/guide-v4/apps/api/src/index.ts#server -->
 
@@ -1902,6 +1911,26 @@ native client sends the token as `auth.token`.
   `<QuickdrawProvider reconnectJitterMs={0}>` refetches them at once.
 - **Timeouts are not retried.** A query that times out rejects with
   `TIMEOUT` once.
+- **A call has a time limit, and `TIMEOUT` does not undo it.** 4.1 had no
+  time limit on the server, MCP included: its React hooks rejected with
+  "Request timeout" after 10 s (their `timeout`) while the handler ran on.
+  In 5.0 every call has one, on every transport and in process (`qd.caller`,
+  `ctx.services`): the method's `timeoutMs`, or else the dispatcher's
+  `limits.callTimeoutMs` (30 s). So jobs, the MCP bridges and in-process
+  callers now get `TIMEOUT` too, and every caller gets it from the server.
+  At the limit the caller gets `TIMEOUT` and `ctx.signal` aborts with it,
+  but a handler still running runs on, and what it writes still commits and
+  is pushed: the server only stopped waiting. A method that waits on a slow
+  outside API sets its `timeoutMs` above the API's worst case, passes the
+  API `ctx.signal` (`fetch(url, { signal: ctx.signal })`), and calls
+  `ctx.signal.throwIfAborted()` before it writes the outcome, so a call
+  that answered `TIMEOUT` writes nothing after it. Its callers treat
+  `TIMEOUT` as an unknown outcome (`isUnknownOutcome(error)` on `./client`):
+  the write may have happened. The server logs a warning (category
+  `quickdraw.call`) when a call that answered `TIMEOUT` goes on to commit
+  writes. A nested `ctx.services` call's writes flush with its caller's
+  run, so the warning fires only when that outermost call answered
+  `TIMEOUT`.
 - **Mutations of an entity are optimistic.** A mutation whose input has `id`
   and whose output is `"entity"` shows its input over the cached row and its
   collection items until the server answers; `optimistic: false` turns that
@@ -1968,7 +1997,7 @@ native client sends the token as `auth.token`.
   as it answers a row the caller may not see, so a stranger cannot tell
   which ids exist (only a service-wide `Admin` gets `NOT_FOUND`).
 - **A mutation ignores its caller's cancel**: only its time limit (30 s by
-  default) stops it.
+  default) ends the call early, and its handler runs on even then (above).
 - **MCP custom tools default to `access: "authenticated"`**, and obey the
   app's `initQuickdraw({ kinds })`.
 - **The MCP HTTP routes refuse a request from a web page** (one carrying an

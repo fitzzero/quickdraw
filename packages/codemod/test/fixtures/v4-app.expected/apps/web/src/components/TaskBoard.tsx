@@ -1,7 +1,8 @@
 "use client";
+
+import type { TaskCard } from "@project/shared";
 import type { UseCollectionResult } from "@fitzzero/quickdraw-core/client";
 import { qd } from "../lib/quickdraw";
-import type { TaskCard } from "@project/shared";
 
 export function TaskBoard({ projectId }: { projectId: string }) {
   // quickdraw-migrate: review [client] declare the collection "byProject" in the taskService contract (see the [collection] marker where 4.x defined it): qd.taskService.byProject does not exist until then, and the cast to the 4.x item type stands in for its type; delete the cast once it is declared

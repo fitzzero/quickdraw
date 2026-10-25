@@ -109,7 +109,7 @@ export const CLIENT_EVENTS = Object.freeze({
   streamSub: "qd:stream:sub",
   /** Unsubscribes from a stream. */
   streamUnsub: "qd:stream:unsub",
-  /** A fire-and-forget channel message, sent volatile: `[s, channel, payload]`. */
+  /** A fire-and-forget channel message, dropped while the connection is backed up: `[s, channel, payload]`. */
   channel: "qd:ch",
   /** A peer link's signal to another socket of an app room: `{ room, to, sig }`. */
   peer: "qd:peer",

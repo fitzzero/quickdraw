@@ -3,6 +3,7 @@ import { assignTask as assignTaskImpl } from "../rows.js";
 import { toTaskDto, countTasksOfTaskServiceCore } from "../service-core.js";
 import type { MethodOf } from "../../../quickdraw.js";
 import type { taskContract } from "@project/shared";
+import type { Tracked } from "@fitzzero/quickdraw-core/prisma";
 
 // Handlers that delegate to a function of their method's own name, as
 // Conveyor's method modules do: an implementation imported under it, a local
@@ -10,7 +11,7 @@ import type { taskContract } from "@project/shared";
 // service's own helper of that name.
 
 // The handler body, named after its method
-async function renameTaskBody(db: PrismaClient, id: string, title: string) {
+async function renameTaskBody(db: Tracked<PrismaClient>, id: string, title: string) {
   return await db.task.update({ where: { id }, data: { title } });
 }
 

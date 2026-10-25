@@ -466,26 +466,30 @@ describe("behind a cluster adapter", () => {
     }
   });
 
-  it("reads every node's sockets for 30 s once a node of an earlier version left a request unanswered", async () => {
-    const bus = peeredCluster();
-    const a = await node(bus, { timeoutMs: 100 });
+  it("counts the other nodes' answers when one never answers, and reads no node's sockets", async () => {
+    // An adapter that hands over the answers that came when its request timeout passes, as Redis's does.
+    const bus = peeredCluster({ requestsTimeout: 100 });
+    const a = await node(bus);
+    const b = await node(bus);
     const ada = await connect(a.app, as(board.ada));
+    const cy = await connect(b.app, as(board.cy));
     await ada.connection.call.taskService.enter({ room: "lobby" });
-    await expect.poll(() => ada.presence).toEqual([{ room: "lobby", users: [board.ada] }]);
+    await cy.connection.call.taskService.enter({ room: "lobby" });
+    const both = [board.ada, board.cy].sort();
+    await expect.poll(() => seenIn(cy.presence)).toEqual(both);
     // A node of an earlier version hears the bus but knows no `quickdraw:presence`: it never answers.
     bus.servers.push(new Server() as unknown as QuickdrawIo);
     const asks = vi.spyOn(a.app.server.io, "serverSideEmitWithAck");
-    expect(await a.app.server.presence.users("lobby")).toEqual([board.ada]);
+    expect((await a.app.server.presence.users("lobby")).sort()).toEqual(both);
     expect(presenceAnswers(asks)).toHaveLength(1);
-    expect(a.fetched).toHaveBeenCalledTimes(1);
     expect(a.warnings()).toEqual([
-      expect.stringContaining("did not answer a presence request within cluster.timeoutMs"),
+      expect.stringContaining("did not answer a presence request in time: 1 other node answered"),
     ]);
-    // Within the 30 s that follow a read asks no node: it reads every node's sockets at once.
-    expect(await a.app.server.presence.count("lobby")).toBe(1);
-    expect(await a.app.server.presence.isOnline(board.cy)).toBe(false);
-    expect(presenceAnswers(asks)).toHaveLength(1);
-    expect(a.fetched).toHaveBeenCalledTimes(3);
+    expect(await a.app.server.presence.count("lobby")).toBe(2);
+    expect(await a.app.server.presence.isOnline(board.cy)).toBe(true);
+    expect(presenceAnswers(asks)).toHaveLength(3);
+    expect(a.fetched).not.toHaveBeenCalled();
+    // At most once every 10 minutes.
     expect(a.warnings()).toHaveLength(1);
   });
 

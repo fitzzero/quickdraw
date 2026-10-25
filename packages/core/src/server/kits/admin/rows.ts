@@ -18,7 +18,10 @@
 // write, then `onWrite`. Statements: one per write without a hook; with one,
 // a read of the row before an `adminUpdate`, and before an `adminDelete`
 // that `prepare` hears (one that only `onWrite` or `onCommitted` hears reads
-// it as it deletes), plus the hooks' own.
+// it as it deletes), plus the hooks' own, which are the app's code: `prepare`
+// and `onWrite` run `checked`, as a handler's statements are. The
+// transaction takes the time limits `transaction` gives, the database
+// client's own (Prisma's 5 s) without them.
 
 import type { IdInput } from "../../../contract/kits/crudSchemas";
 import type { AdminCreateQuery, AdminUpdateQuery } from "../../../contract/kits/adminSchemas";
@@ -28,7 +31,7 @@ import { kitRuntimeOf } from "../../context";
 import { inKitTransaction } from "../transactions";
 import { adminCall, rowOut, rowWhole, tableOf, type AdminCall } from "./runtime";
 import type { AdminContext, AdminPrepare, AdminPrepareCall, AdminWrite } from "./types";
-import { checkWrite, prepareWrite, writeRefusal } from "./writes";
+import { checkWrite, prepareWrite, runOnWrite, writeRefusal } from "./writes";
 import { errorText } from "../../../contract/logger";
 
 async function readRow(call: AdminCall, id: string): Promise<unknown> {
@@ -128,8 +131,9 @@ function prepareCall(write: WriteCall, before: unknown): AdminPrepareCall {
  * Runs one write: alone without a hook, else in a transaction that reads the
  * row before it (`rowBefore`), runs `prepare` when given (whose column values
  * the write sets over the caller's: `prepareWrite`), makes the write and runs
- * `onWrite`, which hears the row before and after, every field; a throw in
- * any of them undoes it all. Once it committed, `onCommitted` hears the same
+ * `onWrite` (`runOnWrite`), which hears the row before and after, every
+ * field; a throw in any of them undoes it all, and so does running past the
+ * transaction's time limit. Once it committed, `onCommitted` hears the same
  * (`committed`). The database's refusal of the values is `VALIDATION` either
  * way.
  */
@@ -173,10 +177,14 @@ async function written(
         ...(write.method === "adminCreate" ? {} : { before: before ?? whole(done.before) }),
         after: whole(done.after),
       };
-      await onWrite?.(heard, ctx, tx);
+      await runOnWrite(context, heard, ctx, tx);
       return done.reply;
     },
-    { owner: "The admin kit's writes with prepare, onWrite or onCommitted" },
+    // `transaction`'s time limits, when the app gave them: a large cascade in `prepare`.
+    {
+      owner: "The admin kit's writes with prepare, onWrite or onCommitted",
+      ...context.transaction,
+    },
   );
   if (heard !== undefined) {
     committed(context, args, heard);

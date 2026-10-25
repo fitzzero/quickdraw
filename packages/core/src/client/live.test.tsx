@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deferred, tick } from "../server/__tests__/fixtures";
 import { as } from "../server/access/__tests__/board";
 import type { Principal } from "../server/index";
-import type { QuickdrawConnection } from "./connection";
+import { callHoldOf, type QuickdrawConnection } from "./connection";
 import { createQuickdrawClient } from "./createClient";
 import { overlaysOf } from "./optimistic";
 import { QuickdrawProvider, useQuickdraw } from "./provider";
@@ -378,7 +378,7 @@ describe("a watched read sent before its topic is joined again", () => {
     const reads = (): number => records.filter((record) => record.method === "countOnBoard").length;
     expect(reads()).toBe(1);
 
-    // An outage: Socket.IO keeps the socket active and buffers the calls made meanwhile.
+    // An outage: Socket.IO keeps the socket active, and the connection holds the calls made meanwhile.
     const manager = connection.socket.io;
     manager.reconnection(false);
     manager.engine.close();
@@ -386,12 +386,12 @@ describe("a watched read sent before its topic is joined again", () => {
     act(() => {
       qd.invalidate(qd.task.countOnBoard, { projectId: board.p1 });
     });
-    await until(() => connection.socket.sendBuffer.length === 1);
+    await until(() => callHoldOf(connection)?.size === 1);
     // The topic's join after the outage waits out a subscription backoff.
     connection.reportRateLimited("subscription", 600);
     manager.reconnection(true);
     connection.socket.connect();
-    // The buffered read reaches the server first, before the topic is joined.
+    // The held read reaches the server first, at the new socket's hello, before the topic is joined.
     await until(() => reads() === 2);
     expect(watchersOf(app, board.p1)).toBe(0);
     // A task is added before the join: no qd:changed can reach this socket for it.

@@ -547,6 +547,37 @@ describe("an added item", () => {
     }
   });
 
+  it("shows nothing a call in flight at a reset opened, once it is refused or succeeds after it", async () => {
+    // Another user's hello resets the store while the last user's call is in flight
+    // (`cacheSession.ts`): kept or not, its items never come back, nor a retry() of them.
+    for (const outcome of ["refused", "succeeded"] as const) {
+      const client = new QueryClient();
+      const view = () => overlaysOf(client).view("taskService");
+      const reply = deferred<unknown>();
+      const done = mutateOptimistically(
+        client,
+        board,
+        (_input, cache) => {
+          cache.addItem("board", "p1", { title: "Kept" }, { onRefused: "keep" });
+          cache.addItem("board", "p1", { title: "Dropped" });
+        },
+        { title: "Kept" },
+        () => reply.promise,
+      );
+      expect(view().added("board", "p1")).toHaveLength(2);
+      resetOverlays(client);
+      if (outcome === "refused") {
+        reply.reject(new QuickdrawError("FORBIDDEN", "Not yours"));
+        await expect(done).rejects.toMatchObject({ code: "FORBIDDEN" });
+      } else {
+        reply.resolve({ id: "t9", title: "Kept" });
+        await done;
+      }
+      expect(view().added("board", "p1")).toEqual([]);
+      expect(view().refused("board", "p1")).toEqual([]);
+    }
+  });
+
   it("keeps an id the update gives, and refuses a scope or an id it cannot show", async () => {
     const client = new QueryClient();
     create(client, { id: "client-made", title: "Draft" });

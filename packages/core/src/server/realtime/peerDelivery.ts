@@ -12,18 +12,19 @@
 // slot for a link that is over.
 //
 // A relay message on `fast` is dropped while the target's connection is
-// backed up: `PEER_RELAY_FAST_BACKLOG` relay messages sent to it wait for
-// the transport (counted until the connection hands what waits to it, its
-// `drain`). Not Socket.IO's volatile, which drops a message whenever a
-// write is in flight, so that of two `fast` messages that reach the server
-// at once the second was always lost.
+// backed up (`backlog.ts`): `PEER_RELAY_FAST_BACKLOG` relay messages and
+// volatile stream frames sent to it wait for the transport (counted until
+// the connection hands what waits to it, its `drain`). Not Socket.IO's
+// volatile, which drops a message whenever a write is in flight, so that of
+// two `fast` messages that reach the server at once the second was always
+// lost.
 
 import { SERVER_EVENTS } from "../../contract/names";
 import type { PeerForwardFrame, RelayForwardFrame } from "../../protocol/envelope";
-import { PEER_RELAY_FAST_BACKLOG } from "../../protocol/version";
 import { emitToNodes, onNodeEvent } from "../cluster/deployment";
 import type { Hub } from "../emit/hub";
 import type { QuickdrawServerSocket } from "../transports/types";
+import { backedUp, countSend } from "./backlog";
 import { readForwardedRelay, readForwardedSignal } from "./peerFrames";
 import {
   disengage,
@@ -64,21 +65,12 @@ function emitSignal(target: QuickdrawServerSocket, frame: PeerForwardFrame): voi
   }
 }
 
-/** Relay messages sent to each socket since its connection last handed what waits to its transport. */
-const waiting = new WeakMap<QuickdrawServerSocket, number>();
-
 /** Sends a relay message to `target`; one on `fast` is dropped while its connection is backed up. */
 function emitRelay(target: QuickdrawServerSocket, frame: RelayForwardFrame): void {
-  const count = waiting.get(target) ?? 0;
-  if (frame[2] === "fast" && count >= PEER_RELAY_FAST_BACKLOG) {
+  if (frame[2] === "fast" && backedUp(target)) {
     return;
   }
-  if (count === 0) {
-    target.conn.once("drain", () => {
-      waiting.delete(target);
-    });
-  }
-  waiting.set(target, count + 1);
+  countSend(target);
   target.emit(SERVER_EVENTS.relay, frame);
 }
 

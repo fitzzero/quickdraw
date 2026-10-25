@@ -36,7 +36,20 @@ export function Providers({ children }: { readonly children: React.ReactNode }) 
   for cookie sessions. Changing it reconnects, and a hello naming another
   user empties everything quickdraw cached, the placeholder a member's
   `useQuery` or `useSearch` would make from it (`keepPreviousData`, the
-  last results) included.
+  last results) included. Live entries never take a placeholder, whatever
+  the `QueryClient`'s defaults: `useEntity` and `useCollection` show nothing
+  of another row, scope or user while a new one loads. A mounted
+  `useMutation` shows none of the last user's calls, and TanStack's
+  `useMutationState` and `useIsMutating` find none of quickdraw's but a
+  call TanStack holds paused (offline, or queued in its `scope`), until it
+  resumes and is refused, never sent as the next user. After a session the
+  server ended, the next hello decides: the same user keeps them.
+- `socketOptions` pass through to Socket.IO's `io()`, but `retries`, which
+  the connection refuses (`TypeError`): Socket.IO would send an unanswered
+  call again on the next connect, before that socket's hello, as whoever it
+  then speaks for, and after a timeout the server may still be running.
+  Never add retries around calls: the query hooks retry a read once after
+  `INTERNAL`, and a write is retried only by its own `retry` option.
 - `useQuickdraw()` gives
   `{ connection, status, isConnected, isKnown, reconnecting, userId, serviceAccess, hello, refusal, isRateLimited }`.
   Gate on `isKnown` (the server's hello named the user; `userId` is then
@@ -126,6 +139,34 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
   (`useCollection().checking` names it until the scope's next load says),
   and only that id lets the load find it and makes `retry()` safe, since
   the second call fails `CONFLICT` instead of writing twice.
+- Every call (a hook's, `qd.<service>.<method>.call()`, `call`) goes out
+  only on a socket whose own hello names the user it was made as: from a
+  connect or a drop until that hello (and in the moment a socket whose
+  ping is overdue still reads connected), quickdraw holds it, then sends
+  it in order, or fails it `CANCELLED` when the hello names someone else
+  (a session cookie that changed at a reconnect). A channel message sent
+  before that hello, or in that moment, is dropped (`isReady` is false
+  until it), so send on `isReady`, not on `status`. Never emit on the socket yourself. A
+  mutation hook also checks each attempt before it goes
+  out: one whose user changed first (`setAuth` in the same handler, an
+  async `onMutate`, a pause offline, a `scope` queue, a retry) fails
+  `CANCELLED`, never sent as the next user and not retried. So does an
+  attempt that starts while new credentials await their hello, even the
+  same user's refreshed token: it is refused, not held. Handle it in
+  `onError` like any refusal, and send again once the hello names the
+  user.
+- A mutation's result (`data`, `error`, `variables`, status) shows only
+  while the server's hello names the user the call ran as: a component that
+  stays mounted while the user changes shows the next user none of the last
+  user's calls, and none while new credentials await their hello. Its
+  callbacks still run for the user who made it. A call made while no hello
+  is held shows (pending, then its answer or error) while none is held
+  under the credentials it was made with, then only to the user the next
+  hello makes it, settled or not (none, when another user's cookie signs
+  in after the server ended the session); new credentials hide it.
+- A mutation that switches the user itself (an anonymous sign-in or
+  sign-up, then `setAuth`) hides its `data` and `isSuccess` once the new
+  hello arrives: act on its result in `onSuccess`, not in render.
 - Never refetch or invalidate after a mutation by hand: the frames update
   live rows and collections, and watched queries refetch themselves. For
   anything else use `qd.invalidate(qd.task.stats, input?)`, never
@@ -149,9 +190,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 ## Realtime
 
 - Channels: `const { send, isReady } = qd.task.cursor.useChannel();` sends
-  fire-and-forget messages (dropped over the channel's rate). A channel that
-  `requires` a room takes messages only from a socket a method joined to it:
-  the client that sends must make the joining call itself.
+  fire-and-forget messages, dropped over the channel's rate and while the
+  connection is backed up (64 packets, or more than 32 KiB, waiting), never
+  for going out just after another: of a burst, 64 go out, and the rest are
+  dropped until the connection has sent them (on a WebSocket, by the next
+  tick). A channel that `requires` a room takes messages only from a
+  socket a method joined to it: the client that sends must make the
+  joining call itself.
 - Events: `qd.task.cursorMoved.useEvent((payload) => ...)` hears the
   contract's events sent to a room the socket is in. An event that carries
   a query's new result writes it into the cache with
@@ -162,10 +207,13 @@ await rename.mutateAsync({ id, title }); // resolves with the output, rejects wi
 - Joining a room: `useJoin(qd.task.enterBoard, { projectId })` runs the
   joining call on every connection (a reconnect is a new socket in no room)
   and when the input changes, never on a re-render, with `status`,
-  `isJoined`, `data`, `error` and `retry()` (a refused join, tried again on
-  the user's say). Never join from a plain `useQuery` or a
-  mount effect: a reconnect leaves the socket out of the room while the
-  cached answer still looks fine. Without React, `connection.onHello`.
+  `isJoined`, `data` (the join's answer, shown only to the user it ran as
+  and for the input it ran with: a new input is `joining`, with no `data`,
+  until its own answer), `error` and `retry()` (a refused join, tried
+  again on the user's say).
+  Never join from a plain `useQuery` or a mount effect: a reconnect leaves
+  the socket out of the room while the cached answer still looks fine.
+  Without React, `connection.onHello`.
 - Peer links: on a server created with `peers: true`,
   `createPeerLink(connection, { room, to, offerer })` (in React,
   `useQuickdraw().connection`) links two sockets of an app room over
@@ -225,8 +273,26 @@ loss })` lags the link's own messages both ways on its real path (`rel`
   TanStack Query installed: it makes a connection with
   `createQuickdrawConnection({ url, auth })`, calls `open()`, and calls
   `callData(connection, { service: "taskService", method: "get", input })`.
-  `./client` re-exports the same functions. Live rows need a TanStack
-  `QueryClient`: `liveDataOf(connection, queryClient)` from `./client`.
+  `./client` re-exports the same functions. Its live data is a live store:
+  `const live = liveStoreOf(connection)` (before `open()`, one per
+  connection), then
+  `holdCollection(live, { contract, collection, scope }, listener)` (also
+  `view`, `load: "all"` and `limit`),
+  `holdEntity(live, { contract, id }, listener)` and
+  `holdStream(live, { contract, stream, scope }, listener)` (`scope` for a
+  scoped stream only; also `max`), typed by the contract. The listener gets
+  what the hook would return (without optimistic overlays), first once
+  `hold*` has returned (so it may call the holding's `release()`), then at
+  most once a microtask as it changes; check `error` as well as the data.
+  Call `release()` when done: the entry goes a tick after its last holding
+  ends. Never call `liveStoreOf` on a connection a `QuickdrawProvider` or
+  `liveDataOf` uses (it throws): give the script its own connection.
+- Code that keeps a TanStack `QueryClient` without hooks (a React Native
+  module) holds live rows in it: `liveDataOf(connection, queryClient)` from
+  `./client`. A row or scope it holds keeps its entry past `gcTime` until it
+  is let go, so let go of each one when done (call the function
+  `entities.subscribe` returns, or a scope holding's `release()`), or its
+  entry stays cached.
 - A client in another language (a Godot game, a native app) speaks the wire
   itself: `docs/protocol-v5.md` in the quickdraw repository is the
   specification, `examples/godot` a GDScript client written from it, and
@@ -239,7 +305,11 @@ loss })` lags the link's own messages both ways on its real path (`rel`
   hook the typed client has none of (infinite scroll over `list` with
   `useInfiniteQuery`, `useSuspenseQuery`, `useQueries`, `queryOptions`), key
   it with the member's `key(input)` (a suffix may follow it) and fetch with
-  its `call(input)`.
+  its `call(input)`. Unlike a member's hooks, such a hook would show the
+  last user's results after a switch of users: give it a `placeholderData`
+  only through `placeholderFromSession(queryClient, placeholderData)` from
+  `./client`, called on every render, and show its data only while
+  `isKnown`.
 - Do not copy server data into React state to keep it current: read it from
   the hooks, which share one cache.
 - The lint rules `no-raw-socket`, `no-untyped-client`, `no-manual-refetch`

@@ -4,6 +4,7 @@
 
 import { dirname, relative, resolve } from "node:path";
 import { Node, SyntaxKind, type Project, type SourceFile, type StringLiteral } from "ts-morph";
+import { regionOf, regionsOf } from "./carveOuts";
 import { isUnder } from "./project";
 
 /** A relative module specifier from `from` to `to` (both file paths). */
@@ -104,12 +105,39 @@ export function ensureImport(
     existing.addNamedImport(specifier);
     return;
   }
-  const index = file.getImportDeclarations().length;
-  file.insertImportDeclaration(index, {
-    moduleSpecifier: module,
-    namedImports: [specifier],
-    isTypeOnly: typeOnly,
-  });
+  const structure = { moduleSpecifier: module, namedImports: [specifier], isTypeOnly: typeOnly };
+  const index = importIndex(file);
+  if (index === undefined) {
+    file.addImportDeclaration(structure);
+  } else {
+    file.insertImportDeclaration(index, structure);
+  }
+}
+
+/**
+ * Where an import the codemod adds goes among the file's statements, its
+ * comments counted (the count of its imports is no such index, and could
+ * land inside a header comment): after its last import outside the
+ * template's carve-out regions (`carveOuts.ts`), whose lines a fork strips,
+ * or before the region of its first import when every import is in one.
+ * `undefined` for a file without imports.
+ */
+function importIndex(file: SourceFile): number | undefined {
+  const imports = file.getImportDeclarations();
+  const first = imports[0];
+  if (first === undefined) {
+    return undefined;
+  }
+  const statements = file.getStatementsWithComments();
+  const last = imports.filter((declaration) => regionOf(declaration) === undefined).at(-1);
+  if (last !== undefined) {
+    return statements.indexOf(last) + 1;
+  }
+  const at = first.getStart();
+  const start =
+    regionsOf(file.getFullText()).find((region) => region.start <= at && at <= region.end)?.start ??
+    at;
+  return statements.findIndex((statement) => statement.getStart() >= start);
 }
 
 /** Whether an identifier refers to a binding, rather than naming a property or a member. */
@@ -130,8 +158,11 @@ function isReference(identifier: Node): boolean {
     Node.isJsxAttribute(parent) ||
     Node.isBindingElement(parent)
   ) {
+    // In `{ key: name = fallback }` only `key` names a property: a default (`{ a = LIMIT }`,
+    // `[b = LIMIT]`) is a reference, and the binding's own name counts as one, conservatively.
+    // A shorthand element (`{ a }`) has no property name, so every child of it counts.
     return Node.isBindingElement(parent)
-      ? parent.getNameNode() === identifier
+      ? parent.getPropertyNameNode() !== identifier
       : parent.getNameNode() !== identifier;
   }
   return true;
@@ -154,11 +185,15 @@ function usedNames(file: SourceFile): Set<string> {
 /**
  * Removes the import specifiers the file no longer uses (and imports left
  * empty). Side-effect imports stay. With `only`, removes only those names.
+ * The blank line between the imports and what opens the file (a directive,
+ * a header comment) stays: it is the first import's leading trivia, which
+ * removing that import would take with it.
  */
 export function removeUnusedImports(file: SourceFile, only?: ReadonlySet<string>): void {
   const used = usedNames(file);
   const unused = (name: string): boolean =>
     !used.has(name) && (only === undefined || only.has(name));
+  const opening = openingAboveImports(file);
   for (const declaration of file.getImportDeclarations()) {
     const named = declaration.getNamedImports();
     const defaultImport = declaration.getDefaultImport();
@@ -185,6 +220,33 @@ export function removeUnusedImports(file: SourceFile, only?: ReadonlySet<string>
       declaration.remove();
     }
   }
+  keepBlankLineUnder(file, opening);
+}
+
+/** Puts back the blank line under `opening` that removing the file's first import took with it. */
+function keepBlankLineUnder(file: SourceFile, opening: string | undefined): void {
+  if (opening === undefined) {
+    return;
+  }
+  const text = file.getFullText();
+  const rest = text.slice(opening.length);
+  if (text.startsWith(opening) && rest.trim() !== "" && !/^[ \t]*\r?\n[ \t]*\r?\n/u.test(rest)) {
+    file.insertText(opening.length, "\n");
+  }
+}
+
+/**
+ * The text that opens the file above its imports, up to the blank line that
+ * separates the two, when one does: `"use client";`, or a header comment.
+ */
+function openingAboveImports(file: SourceFile): string | undefined {
+  const first = file.getImportDeclarations()[0];
+  if (first === undefined) {
+    return undefined;
+  }
+  const above = file.getFullText().slice(0, first.getStart(true));
+  const opening = above.trimEnd();
+  return opening !== "" && /\n[ \t]*\r?\n\s*$/u.test(above) ? opening : undefined;
 }
 
 /**

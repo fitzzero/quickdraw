@@ -6,11 +6,16 @@
 // it as plain code (scripts/dist-smoke.mjs checks all three, and runs a
 // script against a built server with React and TanStack refused).
 //
+// A script holds live data here too: `liveStoreOf` runs the live stores the
+// hooks use over a cache of its own, and `holdCollection`, `holdEntity` and
+// `holdStream` read rows, collection scopes and stream feeds from it.
+//
 // `./client` re-exports all of it, the same functions, beside what needs
 // React or a TanStack `QueryClient`: the provider and the typed client's
 // hooks, the invalidation coordinator, the overlay store, the cache session
-// and live data. Those take a `QueryClient` in their types, so they stay
-// there; a module here imports none of them (`peer/` and `host/` included).
+// and the live data of a `QueryClient` (`liveDataOf`). Those take a
+// `QueryClient` in their types, so they stay there; a module here imports
+// none of them (`peer/`, `host/` and the live store included).
 
 // Isomorphic helpers, the HTTP server caller and the cache keys (also on ./utils).
 export * from "../utils";
@@ -61,6 +66,20 @@ export {
   type SubscriptionEvent,
   type SubscriptionLane,
 } from "./lane";
+
+// A script's live data (RFC 0003 section 11.5): the live stores of one
+// connection over a cache of their own, and what a script holds of them.
+export { liveStoreOf, type LiveStore } from "./live/liveStore";
+export { holdCollection, type HoldCollectionTarget } from "./live/holdCollection";
+export { holdEntity, type HoldEntityTarget } from "./live/holdEntity";
+export { holdStream, type HoldStreamTarget } from "./live/holdStream";
+export type {
+  CollectionHolding,
+  CollectionSnapshot,
+  EntitySnapshot,
+  Holding,
+  StreamSnapshot,
+} from "./live/holding";
 
 // Peer links between two sockets of an app room (RFC 0003 section 12.5):
 // WebRTC data channels, or the server's relay when those cannot form.

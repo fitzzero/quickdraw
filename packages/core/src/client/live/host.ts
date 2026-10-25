@@ -1,69 +1,98 @@
 // What the live data's stores share (RFC 0003 sections 6, 7, 8.2 and 11.5):
-// the connection they subscribe over, the `QueryClient` their state lives
-// in, and the overlay store of optimistic mutations, plus how they read and
-// write that state and how they send a subscription event and read what
+// the connection they subscribe over, the cache their state lives in, and
+// the overlays of optimistic mutations they report to, plus how they read
+// and write that state and how they send a subscription event and read what
 // came back.
 //
-// State lives in the `QueryClient`, under the entity key `["qd", service,
-// "e", id]` and the collection key `["qd", service, "c", collection,
-// scope]`, so the hooks read it as they read any query, and app code and
-// devtools see it. The stores are its only writers. Entries are written
-// whole and without TanStack's structural sharing: an index can hold 50,000
-// rows, and the stores already keep every unchanged object. A hook observes
-// its entry with a query that never fetches, which also keeps TanStack from
-// collecting the entry while it is shown; an entry nobody shows any more is
-// collected after `gcTime`, as any query is.
+// State lives in a `LiveCache`, under the entity key `["qd", service, "e",
+// id]` and the collection key `["qd", service, "c", collection, scope]`. The
+// stores are its only writers. Entries are written whole: an index can hold
+// 50,000 rows, and the stores already keep every unchanged object. The live
+// data of a `QueryClient` (`liveData.ts`) caches in that client
+// (`queryCache.ts`), so the hooks read its entries as they read any query.
 //
-// React-free.
+// React-free, and TanStack-free: a `QueryClient` comes in only through a
+// `LiveCache` and `LiveOverlays` made over it.
 
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { Revision } from "../../protocol/envelope";
 import { QuickdrawError, fromWire } from "../../protocol/errors";
 import { isRecord } from "../../protocol/guards";
+import type { ScopeEvidence, ScopeRef } from "../additions";
 import { DEFAULT_BACKOFF_MS, retryAfterOf } from "../backoff";
 import type { QuickdrawConnection } from "../connection";
+import type { CollectionQueryKey, EntityQueryKey } from "../keys";
 import { subscriptionLimits, type SubscriptionEvent, type SubscriptionLimits } from "../lane";
-import type { OverlayStore } from "../optimistic";
 
-/** The connection and cache one set of live stores works with. */
+/** The key of an entry of the live data: a row's (`entityKey`) or a collection scope's (`collectionKey`). */
+export type LiveKey = EntityQueryKey | CollectionQueryKey;
+
+/** Where one set of live stores keeps its state: an entry per row and per scope. */
+export interface LiveCache {
+  /** The entry under `key`, or `undefined` when none is cached. */
+  get(key: LiveKey): unknown;
+  /** Writes the entry under `key` whole, telling whoever shows it. */
+  set(key: LiveKey, value: unknown): void;
+  /**
+   * The store holds the row or scope of `key` from now on: its first holding
+   * began (`registry.ts`). The entry is kept until `release`, from before the
+   * store writes it: a row or scope held again while its entry is cached may
+   * be answered with what the entry holds, and written nothing.
+   */
+  hold(key: LiveKey): void;
+  /**
+   * The store no longer holds the row or scope of `key`: its last holding
+   * ended a tick ago (`registry.ts`), and nothing writes the entry until it
+   * is held again.
+   */
+  release(key: LiveKey): void;
+}
+
+/**
+ * What the live stores tell the overlays of optimistic mutations, and ask of
+ * them: the overlay store of a `QueryClient` (`../optimistic.ts`), or
+ * `NO_LIVE_OVERLAYS` where no optimistic mutation opens a layer.
+ */
+export interface LiveOverlays {
+  /**
+   * Revision `rev` of the row arrived: in a frame (`qd:e`, `qd:c`), or with
+   * `readAt` in the reply to a read sent then (`OverlayStore.observe`).
+   */
+  observe(service: string, id: string, rev: Revision, readAt?: number): void;
+  /** The overlays' clock: taken when a read is sent, and passed as its `readAt`. */
+  now(): number;
+  /** A scope's state changed: ends the additions to it that state accounts for (`settleAdditions`). */
+  settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void;
+  /** The scopes whose additions of unknown outcome were not asked for a load yet; marks them asked. */
+  unchecked(): readonly ScopeRef[];
+  /** Calls `listener` whenever a layer or an addition changes; returns the unsubscribe function. */
+  subscribe(listener: () => void): () => void;
+}
+
+/** No overlays: nothing is told, and no scope ever needs a load to settle an addition. */
+export const NO_LIVE_OVERLAYS: LiveOverlays = Object.freeze({
+  observe: () => undefined,
+  now: () => 0,
+  settle: () => undefined,
+  unchecked: () => [],
+  subscribe: () => () => undefined,
+});
+
+/** The connection, cache and overlays one set of live stores works with. */
 export interface LiveHost {
   readonly connection: QuickdrawConnection;
-  readonly queryClient: QueryClient;
-  /** The overlays of `queryClient`: told every revision that arrives, and applied to what the hooks show. */
-  readonly overlays: OverlayStore;
+  readonly cache: LiveCache;
+  /** Told every revision that arrives, and every new state of a scope. */
+  readonly overlays: LiveOverlays;
 }
 
 /** An entry of the live data, or `undefined` when none is cached. */
-export function readEntry<T>(host: LiveHost, queryKey: QueryKey): T | undefined {
-  return host.queryClient.getQueryData<T>(queryKey);
+export function readEntry<T>(host: LiveHost, key: LiveKey): T | undefined {
+  return host.cache.get(key) as T | undefined;
 }
 
-/** Writes an entry of the live data, telling the hooks that show it. */
-export function writeEntry<T>(host: LiveHost, queryKey: QueryKey, value: T): void {
-  const { queryClient } = host;
-  const options = queryClient.defaultQueryOptions({ queryKey, structuralSharing: false });
-  queryClient.getQueryCache().build(queryClient, options).setData(value, { manual: true });
-}
-
-/** What a hook observes its entry with: a query that is never fetched, never stale, never shared structurally. */
-export interface EntryQueryOptions<T> {
-  readonly queryKey: QueryKey;
-  readonly queryFn: () => T | null;
-  readonly enabled: false;
-  readonly staleTime: number;
-  readonly structuralSharing: false;
-}
-
-/** The options of the query a hook observes the entry under `queryKey` with. */
-export function entryQuery<T>(queryKey: QueryKey): EntryQueryOptions<T> {
-  return {
-    queryKey,
-    // Never called: the query is disabled, and only the stores write the entry.
-    queryFn: () => null,
-    enabled: false,
-    staleTime: Number.POSITIVE_INFINITY,
-    structuralSharing: false,
-  };
+/** Writes an entry of the live data, telling whoever shows it. */
+export function writeEntry<T>(host: LiveHost, key: LiveKey, value: T): void {
+  host.cache.set(key, value);
 }
 
 /** The subscription limits the server announced on the current connection. */
@@ -109,7 +138,7 @@ function outcomeOf(host: LiveHost, error: Error | null, reply: unknown): Outcome
  * has named the user, nothing is sent and `done` is told `offline` at once:
  * the revisions a request carries could belong to the last user's data, and
  * the live data asks for everything it holds once the hello arrives
- * (`liveData.ts`).
+ * (`stores.ts`).
  */
 export function request(
   host: LiveHost,

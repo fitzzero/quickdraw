@@ -1,39 +1,34 @@
-// Which user a `QueryClient`'s cache holds data for, and what each
-// `qd:hello` does to that cache (RFC 0003 sections 6, 8.1, 11.1 and 11.5).
-// Method results, rows and items are cached as the user who read them was
-// allowed to see them (fields above that user's tier included), and the
-// server answers a version or revision the client holds "not modified" for
-// anyone who may read the row. So the cache of one user is never shown to,
-// nor sent on behalf of, another:
+// The cache session of a `QueryClient` (RFC 0003 sections 6, 8.1, 11.1 and
+// 11.5): which user the client's cache holds data for, and what each
+// `qd:hello` does to it, by the rules of `cacheSession.ts`. Emptying the
+// cache removes every quickdraw query (method results, entity and collection
+// entries, held or not, and the versions that come with them), takes
+// quickdraw's mutations out of TanStack's mutation cache, and drops the
+// optimistic overlays; the same user on new credentials refetches every
+// quickdraw query, as them, and keeps their mutations.
 //
-// - a hello naming another user than the cache was loaded for (`null`, an
-//   anonymous socket, counts as a user) empties the cache: every quickdraw
-//   query is removed (method results, entity and collection entries, held or
-//   not, and the versions that come with them), the optimistic overlays are
-//   dropped, and the live data drops what it holds and loads it again from
-//   scratch (`live/liveData.ts`);
-// - the first hello on new credentials naming the same user (a refreshed
-//   token) keeps the cache and refetches it, as the new credentials;
-// - a hello after a reconnect with the same credentials changes nothing;
-// - a session the server ends (its disconnect, or a connect or reconnect
-//   refused with `UNAUTHENTICATED` or `FORBIDDEN`; the 5.1 audit's CLIENT-1),
-//   data a server render prefetched included, empties the
-//   cache as another user's hello does, and the cache is then loaded for
-//   nobody: the hooks show nothing of what was cached, and the live data
-//   loads from scratch once a hello names a user again. The session listens
-//   to the socket's own events for this, so new credentials (`setAuth`),
-//   which also clear the hello, still await the hello to decide. A connect
-//   or reconnect refused `INTERNAL` (the server could not check the
-//   credentials) does not end the session: the cache stays.
+// Quickdraw's mutations are those its mutation hooks make (marked
+// `meta.qd`, whatever key their options give) and any keyed under
+// `["qd", …]`. Another user's hello takes them out of the mutation cache. A
+// session the server ended leaves them to its next hello, which keeps them
+// when it names the same user, whose calls may still go out as them
+// (`issuer.ts`), and takes them out when it names anyone else: taking a
+// call out at the end would reorder its scope or lose its retry if that user
+// comes back (below). The queries and overlays still go at the end.
 //
-// The hooks and the live stores read nothing before the hello on the current
-// credentials has arrived (`context.ts`, `query.ts`, `live/host.ts`), so no
-// version or revision of the last user's data leaves the client first, and
-// while new credentials await their hello the hooks show nothing of what is
-// cached (`awaitingHello`): no cache is removed until the hello decides, and
-// a hello naming the same user shows it again. 4.1
-// cleared nothing on a token change; 5.0's first cut refetched with the
-// versions held, which the server answered "not modified" for the new user.
+// A mutation leaves the mutation cache at once, but one TanStack holds
+// paused (offline, or queued behind another of its scope), which leaves the
+// moment it settles: TanStack resumes only the paused mutations its cache
+// holds, and runs a scope's next call only from its cache. One taken out
+// while it runs runs on, out of the cache, and settles, and its callbacks
+// run for the user who made it (`mutation.ts`): the hello that empties the
+// cache refuses a call held for it, and any later attempt is refused
+// (`issuer.ts`). A paused one is refused once it resumes; until then
+// TanStack's `useIsMutating` and `useMutationState` still see it. One taken
+// out that pauses later (offline when its retry, or its first attempt after
+// an async `onMutate`, comes) is never resumed, as after
+// `queryClient.clear()`: never sent, its ticket let go (`untilDead`), its
+// callbacks not run.
 //
 // Pushes that say the user's access changed refetch what it may have
 // changed, through the invalidation coordinator (`refetchOnAccessChanges`):
@@ -43,40 +38,16 @@
 // React-free: the provider makes the session of its connection and
 // `QueryClient`, and the live data uses the same one.
 
-import type { QueryClient } from "@tanstack/react-query";
+import type { Mutation, MutationCache, QueryClient } from "@tanstack/react-query";
 import { SERVER_EVENTS } from "../contract/names";
 import { isName, isRecord } from "../protocol/guards";
-import type { HelloFrame } from "../protocol/version";
-import { isServerDisconnect, isSessionRefusal, type QuickdrawConnection } from "./connection";
+import { awaitingHelloOf, cacheSessionOf, userOf, type CacheSession } from "./cacheSession";
+import { endedSessionOf, type QuickdrawConnection } from "./connection";
 import type { InvalidationCoordinator } from "./coordinator";
 import { KEY_ROOT, serviceKeyPrefix } from "./keys";
 import { resetOverlays } from "./optimistic";
-import { notifyEach } from "./watch";
 
-/** What a new `qd:hello`, or the end of the session, meant for the cache. */
-export interface HelloChange {
-  /**
-   * It names another user than the cache was loaded for, or the server ended
-   * the session: the cache was emptied.
-   */
-  readonly switched: boolean;
-  /** No hello was held before it: the connection's first, or the first on new credentials. */
-  readonly first: boolean;
-}
-
-/** The hellos of one connection, as they concern the cache of one `QueryClient`. */
-export interface CacheSession {
-  /**
-   * Calls `listener` after each new hello, once the cache is settled for the
-   * user it names; returns the unsubscribe function.
-   */
-  onHello(listener: (change: HelloChange) => void): () => void;
-}
-
-/** The user each cache was loaded for (`null`: anonymous); absent before its first hello. */
-const loadedFor = new WeakMap<QueryClient, { readonly userId: string | null }>();
-
-const sessions = new WeakMap<QuickdrawConnection, WeakMap<QueryClient, CacheSession>>();
+export { userOf, type CacheSession, type HelloChange } from "./cacheSession";
 
 /**
  * True while new credentials await their hello on a connection whose cache
@@ -86,79 +57,48 @@ const sessions = new WeakMap<QuickdrawConnection, WeakMap<QueryClient, CacheSess
  * the connection's first hello, so data a server render prefetched shows.
  */
 export function awaitingHello(connection: QuickdrawConnection, queryClient: QueryClient): boolean {
-  return connection.getState().hello === null && loadedFor.has(queryClient);
+  return awaitingHelloOf(connection, queryClient);
 }
 
-/** The user a hello names: its `userId`, or `null` for an anonymous socket. */
-export function userOf(hello: unknown): string | null {
-  return isRecord(hello) && typeof hello.userId === "string" ? hello.userId : null;
-}
-
-/** Settles `queryClient`'s cache for the user `hello` names. */
-function settle(queryClient: QueryClient, hello: HelloFrame, first: boolean): HelloChange {
-  const user = userOf(hello);
-  const loaded = loadedFor.get(queryClient);
-  loadedFor.set(queryClient, { userId: user });
-  if (loaded !== undefined && loaded.userId !== user) {
-    queryClient.removeQueries({ queryKey: [KEY_ROOT] });
-    resetOverlays(queryClient);
-    return { switched: true, first };
-  }
-  if (loaded !== undefined && first) {
-    // The same user on new credentials: what is cached may stay, read again as them.
-    void queryClient.invalidateQueries({ queryKey: [KEY_ROOT] });
-  }
-  return { switched: false, first };
-}
-
-function createSession(connection: QuickdrawConnection, queryClient: QueryClient): CacheSession {
-  const listeners = new Set<(change: HelloChange) => void>();
-  let held = connection.getState().hello;
-  if (held !== null) {
-    settle(queryClient, held, false);
-  }
-  connection.subscribe(() => {
-    const next = connection.getState().hello;
-    if (next === held) {
+/** Takes `mutation` out of `cache` the moment it settles, once every listener heard it settle. */
+function dropOnceSettled(cache: MutationCache, mutation: Mutation): void {
+  const stop = cache.subscribe((event) => {
+    if (event.mutation !== mutation) {
       return;
     }
-    const first = held === null;
-    held = next;
-    if (next !== null) {
-      const change = settle(queryClient, next, first);
-      notifyEach(listeners, (listener) => {
-        listener(change);
+    const settled =
+      event.type === "updated" &&
+      (event.action.type === "success" || event.action.type === "error");
+    if (settled || event.type === "removed") {
+      stop();
+    }
+    if (settled) {
+      queueMicrotask(() => {
+        cache.remove(mutation);
       });
     }
   });
-  // The server ended the session: nothing cached is anyone's any more.
-  const end = (): void => {
-    queryClient.removeQueries({ queryKey: [KEY_ROOT] });
-    resetOverlays(queryClient);
-    loadedFor.set(queryClient, { userId: null });
-    notifyEach(listeners, (listener) => {
-      listener({ switched: true, first: false });
-    });
-  };
-  const { socket } = connection;
-  socket.on("disconnect", (reason: unknown) => {
-    if (isServerDisconnect(reason)) {
-      end();
+}
+
+/** True for a mutation of quickdraw's: a mutation hook's (`meta.qd`), or one keyed under `["qd", …]`. */
+function isQuickdraw(mutation: Mutation): boolean {
+  return mutation.meta?.[KEY_ROOT] === true || mutation.options.mutationKey?.[0] === KEY_ROOT;
+}
+
+/**
+ * Takes quickdraw's mutations out of `queryClient`'s mutation cache at once,
+ * but a paused one, which goes the moment it settles (see the top of this
+ * file). The app's own mutations stay.
+ */
+function dropMutations(queryClient: QueryClient): void {
+  const cache = queryClient.getMutationCache();
+  for (const mutation of cache.findAll({ predicate: isQuickdraw })) {
+    if (mutation.state.isPaused) {
+      dropOnceSettled(cache, mutation);
+    } else {
+      cache.remove(mutation);
     }
-  });
-  socket.on("connect_error", (error: unknown) => {
-    if (!socket.active && isRecord(error) && isSessionRefusal(error.data)) {
-      end();
-    }
-  });
-  return Object.freeze({
-    onHello(listener: (change: HelloChange) => void): () => void {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  });
+  }
 }
 
 /**
@@ -169,17 +109,32 @@ function createSession(connection: QuickdrawConnection, queryClient: QueryClient
  * connection opens.
  */
 export function sessionOf(connection: QuickdrawConnection, queryClient: QueryClient): CacheSession {
-  let byClient = sessions.get(connection);
-  if (byClient === undefined) {
-    byClient = new WeakMap();
-    sessions.set(connection, byClient);
-  }
-  let session = byClient.get(queryClient);
-  if (session === undefined) {
-    session = createSession(connection, queryClient);
-    byClient.set(queryClient, session);
-  }
-  return session;
+  // The user whose session the server ended, until the next hello: their mutations wait for it.
+  let ended: { readonly user: string | null } | undefined;
+  /** A hello: drops quickdraw's mutations for another user (`switched`) unless a session just ended. */
+  const settleMutations = (switched: boolean): void => {
+    const user = userOf(connection.getState().hello);
+    if (ended === undefined ? switched : ended.user !== user) {
+      dropMutations(queryClient);
+    }
+    ended = undefined;
+  };
+  return cacheSessionOf(connection, queryClient, {
+    empty: () => {
+      queryClient.removeQueries({ queryKey: [KEY_ROOT] });
+      if (connection.getState().hello === null) {
+        // The server ended the session (`cacheSession.ts`): its user may come back, and send them.
+        ended ??= { user: userOf(endedSessionOf(connection)?.hello) };
+      } else {
+        settleMutations(true);
+      }
+      resetOverlays(queryClient);
+    },
+    refresh: () => {
+      settleMutations(false);
+      void queryClient.invalidateQueries({ queryKey: [KEY_ROOT] });
+    },
+  });
 }
 
 /**

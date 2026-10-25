@@ -259,9 +259,9 @@ export function defineLiveService(
 type Connected = Pick<TestConnection, "socket">;
 
 /**
- * Sends a channel message, unacknowledged. The client sends volatile, which
- * Socket.IO may drop on the client while a write is pending; the tests send
- * plainly so every message they count reaches the server.
+ * Sends a channel message, unacknowledged, as the client does
+ * (`useChannel`, which drops one only while its connection is backed up,
+ * never in a test's few messages).
  */
 export function send(connection: Connected, channel: string, payload: unknown, s = "taskService") {
   connection.socket.emit("qd:ch", [s, channel, payload]);

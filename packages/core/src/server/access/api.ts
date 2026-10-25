@@ -140,6 +140,21 @@ export interface PolicyEngine extends DispatcherAccess {
   forget(forgotten: Forgotten): void;
   /** `ctx.access` for one call's caller: `null` (anonymous) has no level on any row. */
   forCaller(principal: Principal | null): ContextAccess;
+  /**
+   * Starts the engine hearing its storage adapter's writes. With `cacheMs`,
+   * it then evicts what each tracked write changes once the write is
+   * durable (`createWriteEvictor`), whichever dispatcher made it. The
+   * dispatcher calls it last, once its construction can no longer throw, so
+   * a failed construction leaves no listener behind. Calls after the first,
+   * or after `close`, do nothing.
+   */
+  listen(): void;
+  /**
+   * Stops the engine hearing them; only this dispatcher's own flushes evict
+   * after it. The dispatcher's detach (a server's `close()`) calls it. Calls
+   * after the first do nothing.
+   */
+  close(): void;
 }
 
 function bindingFor(state: EngineState, service: AnyContract | string): Binding {

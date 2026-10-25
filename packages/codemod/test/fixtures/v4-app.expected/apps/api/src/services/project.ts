@@ -9,6 +9,7 @@ import { jsonAcl } from "@fitzzero/quickdraw-core/server";
 import type { ACL, AccessLevel, CollectionSnapshotPage } from "@fitzzero/quickdraw-core";
 import { z } from "zod";
 import { getProjectLimits } from "./project-methods/limits.js";
+import { clearProjectAcl, removeProjectMembers, writeProjectAcl } from "./shared/writers.js";
 import { qd } from "../quickdraw.js";
 import { db } from "../db.js";
 
@@ -146,6 +147,7 @@ export const projectService = qd.defineService(projectContract, {
       handler: async ({ input }) => {
         // quickdraw-migrate: review [write] 4.x CRUD helper this.update: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.update(...) instead (frames follow the tracked write; hooks do not run; 4.x returned null for a missing row where db.update throws NOT_FOUND)
         await this.update(input.id, { archived: true });
+        await removeProjectMembers(db, input.id);
         // quickdraw-migrate: review [emit] room event: declare it in the contract's events and send it with ctx.rooms.emit(room, contract, event, payload)
         this.emitToRoom(serviceRoom("projectService", input.id), "project:archived", {
           id: input.id,
@@ -157,6 +159,7 @@ export const projectService = qd.defineService(projectContract, {
     deleteProject: {
       access: { service: "Admin", entry: "Admin", id: "id" },
       handler: async ({ input, ctx }) => {
+        await clearProjectAcl(db, input.id);
         // quickdraw-migrate: review [write] 4.x CRUD helper this.delete: it also emitted the entity and collection deltas and ran the lifecycle hooks. Write db.project.delete(...) instead (frames follow the tracked write; hooks do not run; 4.x returned false for a missing row where db.delete throws NOT_FOUND)
         const deleted = await this.delete(input.id);
         // quickdraw-migrate: review [error] 4.x sent this error's message to the caller; 5.0 answers an error that is not a QuickdrawError with INTERNAL and a generic message: throw new QuickdrawError(code, message) with the code that fits (NOT_FOUND, FORBIDDEN, CONFLICT, VALIDATION) if the caller should see it
@@ -197,10 +200,7 @@ export const projectService = qd.defineService(projectContract, {
             (entry) => entry.userId !== input.userId,
           );
           acl.push({ userId: input.userId, level: input.level });
-          await tx.project.update({
-            where: { id: input.id },
-            data: { acl: acl as unknown as Prisma.InputJsonValue },
-          });
+          await writeProjectAcl(tx, input.id, acl as unknown as Prisma.InputJsonValue);
         });
         return { id: input.id };
       },

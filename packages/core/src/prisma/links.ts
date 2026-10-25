@@ -2,7 +2,8 @@
 // 0003 sections 5.2 and 7.2; the 5.1 audit's COLL-3). A `via` collection
 // registers its junction as its entries' links (`registerLinks`); a `delete`
 // or `deleteMany` of an entry then reads the junction rows that link the
-// rows it deletes, through the open transaction, and records them in each
+// rows it deletes, through the client the delete came from (its open
+// transaction's, for a transaction client), and records them in each
 // write's `links`, possibly none, so its flush tells only the scopes a
 // deleted entry was linked to. A junction the client does not have, or a
 // read that fails validation (a column it does not have), leaves the links
@@ -23,12 +24,13 @@ import type { Delegate, Row, Runtime } from "./operations";
 /** Per entry id, per junction model: the junction rows linking it. */
 export type Links = ReadonlyMap<string, Record<string, Row[]>>;
 
-const UNREAD = new WeakMap<Runtime, Set<string>>();
+/** Per tracked client (its tracker, which both of its runtimes share): the warnings given. */
+const UNREAD = new WeakMap<object, Set<string>>();
 
 /** Says once per model and junction that a delete's links could not be read. */
 function warnUnread(runtime: Runtime, model: string, junction: string): void {
-  const warned = UNREAD.get(runtime) ?? new Set<string>();
-  UNREAD.set(runtime, warned);
+  const warned = UNREAD.get(runtime.tracker) ?? new Set<string>();
+  UNREAD.set(runtime.tracker, warned);
   const key = `${model}\u0000${junction}`;
   if (warned.has(key)) {
     return;

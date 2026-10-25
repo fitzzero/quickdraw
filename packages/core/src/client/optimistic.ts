@@ -258,6 +258,8 @@ export interface StoreInternals extends OverlayStore {
   unchecked(): ScopeRef[];
   /** Drops a refused addition: the app dismissed it, or sends its call again. */
   dismiss(addition: Addition): void;
+  /** How many times the store was emptied for another user (`reset`): what it held before is gone. */
+  generation(): number;
   /** Ends the finished additions to a scope that it accounts for (`settleAdditions`). */
   settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void;
   /** Drops every layer and every revision seen: the cache was emptied for another user. */
@@ -705,6 +707,7 @@ function createStore(queryClient: QueryClient): StoreInternals {
     dismiss(addition: Addition): void {
       discard(layers, [], [addition]);
     },
+    generation: () => layers.additions.generation,
     settle(service: string, collection: string, scope: string, evidence: ScopeEvidence): void {
       settleScope(layers, { service, collection, scope }, evidence);
     },
@@ -746,12 +749,13 @@ export function resetOverlays(queryClient: QueryClient): void {
 
 /**
  * The state of scope `scope` of `collection` of `service` changed in the
- * cache of `queryClient` (`live/collectionController.ts`): its finished
- * additions end when that state accounts for them, because it holds the id
- * their reply named (the server's own copy is shown now), a delta just
- * applied named it, or the load just applied was sent after their call's
- * reply (`readAt`) and so would hold it if it were a member. Additions of
- * calls in flight stay.
+ * cache of `queryClient`: its finished additions end when that state
+ * accounts for them, because it holds the id their reply named (the
+ * server's own copy is shown now), a delta just applied named it, or the
+ * load just applied was sent after their call's reply (`readAt`) and so
+ * would hold it if it were a member. Additions of calls in flight stay. The
+ * live data's collection controllers settle a scope the same way, through
+ * their host's overlays (`live/host.ts`).
  */
 export function settleAdditions(
   queryClient: QueryClient,

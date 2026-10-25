@@ -33,6 +33,7 @@ import {
   type MethodQueryKey,
   type OverlayStore,
   type QuickdrawProviderProps,
+  type SocketClientOptions,
   type UseEntityResult,
   type UseJoinResult,
 } from "./index";
@@ -376,5 +377,19 @@ describe("the server caller", () => {
     void server.taskService.get.useQuery;
     // @ts-expect-error a mutation has no key
     void server.taskService.rename.key;
+  });
+});
+
+describe("socketOptions", () => {
+  test("take Socket.IO's manager and socket options, but retries", () => {
+    expectTypeOf<SocketClientOptions>().toHaveProperty("reconnectionDelay");
+    expectTypeOf<SocketClientOptions>().toHaveProperty("ackTimeout");
+    expectTypeOf<SocketClientOptions>().not.toHaveProperty("retries");
+    expectTypeOf<QuickdrawProviderProps<{ readonly task: typeof task }>>()
+      .toHaveProperty("socketOptions")
+      .toEqualTypeOf<SocketClientOptions | undefined>();
+    // @ts-expect-error Socket.IO would send a call again at the next connect, before its hello
+    const refused: SocketClientOptions = { retries: 2 };
+    void refused;
   });
 });

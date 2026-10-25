@@ -30,7 +30,7 @@ import {
 } from "../columns";
 import { rowLevel } from "../crud/access";
 import { checkSeen, type AdminCall } from "./runtime";
-import type { AdminContext, AdminPrepare, AdminPrepareCall } from "./types";
+import type { AdminContext, AdminPrepare, AdminPrepareCall, AdminWrite } from "./types";
 
 type Data = Readonly<Record<string, unknown>>;
 
@@ -137,6 +137,23 @@ export async function prepareWrite(
     creating: write.method === "adminCreate",
   });
   return { ...data, ...columns };
+}
+
+/**
+ * Runs the app's `onWrite`, when it gave one, after a write, in the write's
+ * transaction (`db`). It is the app's code, so its statements are checked
+ * like a handler's, as `prepare`'s are: a loop of writes in it is an N+1.
+ */
+export async function runOnWrite(
+  context: AdminContext,
+  write: AdminWrite,
+  ctx: Parameters<AdminPrepare>[1],
+  db: unknown,
+): Promise<void> {
+  const { onWrite } = context;
+  if (onWrite !== undefined) {
+    await checked(() => onWrite(write, ctx, db));
+  }
 }
 
 /** True for Prisma's report of a value its column cannot hold: the wrong kind, or out of range. */
