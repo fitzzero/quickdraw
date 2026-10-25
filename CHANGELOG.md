@@ -650,6 +650,21 @@ room)` and `onHostChange(connection, listener)` on `./client` say who
   as `close()` does. The router goes on the app, and the startup checks
   start, only once the sockets are made, so a failed start leaves no router
   on the app and nothing on its HTTP server.
+- **A call that answered `TIMEOUT` and went on to commit is logged.** At its
+  time limit (`timeoutMs`, else `limits.callTimeoutMs`, 30 s) a call answers
+  `TIMEOUT` and aborts `ctx.signal`, but a handler that runs on still
+  commits what it writes, and its flush pushes it: the server only stopped
+  waiting. The server now warns, in every environment, under
+  `quickdraw.call` with the call's request id, when a call that answered
+  `TIMEOUT` at its time limit goes on to commit writes. The warning names
+  the method, its time limit and the writes, and says to set `timeoutMs`
+  above the method's slowest path or to check `ctx.signal` before writing.
+  A shared run warns once. `UnitOfWork` gains an optional `recorded`, the
+  writes its `flush` will hand on, which `trackPrisma`'s units implement; a
+  unit of work that leaves it out is never warned about. The upgrade guide
+  ("Defaults that changed"), `UPGRADE-PROMPT.md`, the README and the
+  services rule now say what `TIMEOUT` means, and what a method that waits
+  on an outside API does about it.
 - **A collection can require a service grant.** `collections: { mine:
 { scopeAccess: "self", requires: { service: "Read" } } }` in
   `defineService` gives a list the grant its methods ask for: besides the

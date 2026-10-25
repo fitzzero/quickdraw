@@ -142,6 +142,13 @@ warns, so the baseline only shrinks.
   report is empty, the baseline should be too.
 - The typecheck: the codemod's output typechecks against 5.0 apart from what
   its markers cover, so what fails is the work that is left.
+- The methods that wait on an outside service (a payment, mail or model API,
+  a webhook): a 5.0 call answers `TIMEOUT` at its time limit (30 s by
+  default; 4.x had none on the server) while its handler runs on and
+  commits. List them, and give each a `timeoutMs` above its slowest path;
+  have it pass `ctx.signal` to the outside call and call
+  `ctx.signal.throwIfAborted()` before it writes the outcome (MIGRATION.md,
+  "Defaults that changed").
 - The tests, and the app itself: sign in, open a board, change a row from a
   second session and watch it arrive.
 

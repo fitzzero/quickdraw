@@ -32,7 +32,7 @@ export const ERROR_CODES = Object.freeze([
  * - `VALIDATION` (422): the input failed its schema; see {@link ValidationErrorData}.
  * - `RATE_LIMITED` (429): a limiter or a full queue; see {@link RateLimitedErrorData}.
  * - `CANCELLED` (499): the caller cancelled.
- * - `TIMEOUT` (504): the handler ran past its time limit.
+ * - `TIMEOUT` (504): the server stopped waiting; the handler may still commit (an unknown outcome).
  * - `INTERNAL` (500): anything else.
  */
 export type ErrorCode = (typeof ERROR_CODES)[number];

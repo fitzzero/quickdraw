@@ -1,9 +1,14 @@
 // Concurrency, cancellation and the time limit (RFC 0003 section 9, steps 2
-// and 7), through the dispatcher.
+// and 7), through the dispatcher, and the warning for a handler that goes on
+// to write after its call answered TIMEOUT.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHarness, type Harness } from "../prisma/__tests__/harness";
+import { QuickdrawError } from "../protocol/errors";
 import {
+  alice,
   bob,
+  captureLogger,
   deferred,
   qd,
   setup,
@@ -11,9 +16,11 @@ import {
   taskDefaults,
   taskRow,
   tick,
+  type AppPrincipal,
   type Deferred,
 } from "./__tests__/fixtures";
-import { custom, type DispatchResult } from "./index";
+import { createDispatcher, detachDispatcher } from "./dispatcher";
+import { custom, initQuickdraw, type DispatchResult } from "./index";
 
 function codeOf(result: DispatchResult): string {
   return result.ok ? "ok" : result.error.code;
@@ -393,5 +400,184 @@ describe("the time limit", () => {
     expect(
       codeOf(await call({ method: "rename", input: { id: "t1", title: "x" }, principal: bob })),
     ).toBe("TIMEOUT");
+  });
+});
+
+describe("the late-write warning", () => {
+  let h: Harness;
+  let projectId: string;
+  const dispatchers: object[] = [];
+
+  beforeAll(async () => {
+    h = await createHarness();
+  }, 60_000);
+
+  afterAll(async () => {
+    await h.close();
+  });
+
+  beforeEach(async () => {
+    await h.database.reset();
+    ({ projectId } = await h.seed());
+  });
+
+  afterEach(() => {
+    for (const dispatcher of dispatchers.splice(0)) {
+      detachDispatcher(dispatcher);
+    }
+  });
+
+  /**
+   * What the handler does once the test opens its gate: rename the seeded project (`"write"`),
+   * check `ctx.signal` and then rename it (`"check"`), nothing (`"skip"`), or rename it and then
+   * throw a `TIMEOUT` of its own (`"throw"`).
+   */
+  type Then = "write" | "check" | "skip" | "throw";
+
+  /**
+   * A dispatcher over the tracked client whose `rename` mutation and shared `count` query wait
+   * for `open()`, then do `then`, within `timeoutMs`. `settled()` resolves once every handler
+   * that started has ended and its run has flushed.
+   */
+  function slowWriter(then: Then, timeoutMs = 20) {
+    const gate = deferred();
+    const ended: Promise<unknown>[] = [];
+    const qdb = initQuickdraw<{ db: Harness["db"]; principal: AppPrincipal }>();
+    const work = async (db: Harness["db"], signal: AbortSignal): Promise<void> => {
+      await gate.promise;
+      if (then === "check") {
+        signal.throwIfAborted();
+      }
+      if (then !== "skip") {
+        await db.project.update({ where: { id: projectId }, data: { name: "Renamed late" } });
+      }
+      if (then === "throw") {
+        throw new QuickdrawError("TIMEOUT", "The payment provider did not answer");
+      }
+    };
+    const run = (db: Harness["db"], signal: AbortSignal): Promise<void> => {
+      const running = work(db, signal);
+      ended.push(running.catch(() => undefined));
+      return running;
+    };
+    const service = qdb.defineService(task, {
+      methods: {
+        ...taskDefaults,
+        rename: {
+          access: "authenticated",
+          rowless: true,
+          timeoutMs,
+          handler: async ({ ctx, db }) => {
+            await run(db, ctx.signal);
+            return taskRow();
+          },
+        },
+        count: {
+          access: "authenticated",
+          share: "caller",
+          timeoutMs,
+          handler: async ({ ctx, db }) => {
+            await run(db, ctx.signal);
+            return 0;
+          },
+        },
+      },
+    });
+    const logger = captureLogger();
+    const dispatcher = createDispatcher({ services: [service], db: h.db, logger });
+    dispatchers.push(dispatcher);
+    return {
+      call: (method: "rename" | "count", requestId: string) =>
+        dispatcher.call({
+          service: "taskService",
+          method,
+          input: method === "rename" ? { id: "t1", title: "x" } : { projectId: "p1" },
+          principal: alice,
+          transport: "socket",
+          requestId,
+        }),
+      open: () => {
+        gate.resolve();
+      },
+      settled: async () => {
+        await Promise.all(ended);
+        await tick();
+      },
+      /** The warnings of category `quickdraw.call`. */
+      warnings: () =>
+        logger.at("warn").filter((entry) => entry.meta?.category === "quickdraw.call"),
+    };
+  }
+
+  async function projectName(): Promise<string> {
+    return (await h.prisma.project.findUniqueOrThrow({ where: { id: projectId } })).name;
+  }
+
+  it("names a call that answered TIMEOUT whose handler went on to commit, once", async () => {
+    const slow = slowWriter("write");
+    expect(codeOf(await slow.call("rename", "r1"))).toBe("TIMEOUT");
+    slow.open();
+    await slow.settled();
+    expect(await projectName()).toBe("Renamed late");
+    expect(slow.warnings()).toEqual([
+      {
+        level: "warn",
+        message:
+          "taskService.rename answered TIMEOUT after 20 ms, and its handler went on to commit 1 write; set timeoutMs above its slowest path, or check ctx.signal before writing",
+        meta: {
+          category: "quickdraw.call",
+          requestId: "r1",
+          service: "taskService",
+          method: "rename",
+          timeoutMs: 20,
+          writes: 1,
+        },
+      },
+    ]);
+  });
+
+  it("is not logged for a handler that checks ctx.signal before writing, which writes nothing", async () => {
+    const slow = slowWriter("check");
+    expect(codeOf(await slow.call("rename", "r1"))).toBe("TIMEOUT");
+    slow.open();
+    await slow.settled();
+    expect(await projectName()).toBe("Board");
+    expect(slow.warnings()).toEqual([]);
+  });
+
+  it("is not logged for a call within its time limit", async () => {
+    const slow = slowWriter("write", 10_000);
+    slow.open();
+    expect(codeOf(await slow.call("rename", "r1"))).toBe("ok");
+    expect(await projectName()).toBe("Renamed late");
+    expect(slow.warnings()).toEqual([]);
+  });
+
+  it("is not logged for a timed-out handler that writes nothing", async () => {
+    const slow = slowWriter("skip");
+    expect(codeOf(await slow.call("rename", "r1"))).toBe("TIMEOUT");
+    slow.open();
+    await slow.settled();
+    expect(slow.warnings()).toEqual([]);
+  });
+
+  it("is not logged for a TIMEOUT the handler threw itself, within the time limit", async () => {
+    const slow = slowWriter("throw", 10_000);
+    slow.open();
+    const result = await slow.call("rename", "r1");
+    expect(result.ok === false && result.error.message).toBe("The payment provider did not answer");
+    expect(await projectName()).toBe("Renamed late");
+    expect(slow.warnings()).toEqual([]);
+  });
+
+  it("is logged once for a shared run, however many of its callers answered TIMEOUT", async () => {
+    const slow = slowWriter("write");
+    const results = await Promise.all([slow.call("count", "r1"), slow.call("count", "r2")]);
+    expect(results.map(codeOf)).toEqual(["TIMEOUT", "TIMEOUT"]);
+    slow.open();
+    await slow.settled();
+    expect(slow.warnings().map((entry) => [entry.meta?.method, entry.meta?.requestId])).toEqual([
+      ["count", "r1"],
+    ]);
   });
 });
