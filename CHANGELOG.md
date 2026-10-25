@@ -13,20 +13,31 @@ What an app on 5.1.3 checks, each with the entry below that says more:
 - An HTTP call whose `authenticate` or `loadServiceAccess` throws anything
   but a `QuickdrawError` `UNAUTHENTICATED` or `FORBIDDEN` is answered
   `INTERNAL` (500), not 401 (Server: "an HTTP call whose `authenticate`
-  cannot run"), and an MCP `principal` hook that does is answered
-  `INTERNAL`, not `UNAUTHENTICATED` (Server: "an MCP call whose `principal`
-  hook cannot run").
+  cannot run"), and an MCP `principal` hook that does, or that returns a
+  principal of the wrong shape, is answered `INTERNAL`, not
+  `UNAUTHENTICATED` (Server: "an MCP call whose `principal` hook cannot
+  run").
+- `createMcpHttpRouter` answers `POST {path}` (`/mcp`) itself, as MCP's
+  Streamable HTTP transport, and GET and DELETE there 405, so an app's own
+  `/mcp` handler mounted after it no longer gets them (Server:
+  "`createMcpHttpRouter` serves MCP's Streamable HTTP transport").
 - `access.cacheMs` needs the storage adapter's `onWrite`, or
   `createDispatcher` throws a `TypeError` (Server: "With `cacheMs`, a check
   later in the same call sees the call's own access writes").
 - The root `db` used inside a `db.$transaction(async (tx) => ...)` callback
-  runs outside the transaction: it neither rolls back with it nor sees its
-  rows. Write through `tx` (Server: "each client's work is tracked in the
-  transaction it runs in").
-- `setupRedisAdapter`'s `requestsTimeout` defaults to `cluster.timeoutMs`
-  (1 s by default, where the Redis adapter's own default is 5 s), and one
-  that is not above 0 is a `TypeError` (Server: "`setupRedisAdapter` gives
-  the adapter it builds the server's `cluster.timeoutMs`").
+  runs outside the transaction, a root `createMany` and `updateMany`
+  included: it neither rolls back with it nor sees its rows, and on PGlite
+  it waits for the transaction to end. Write through `tx` (Server: "each
+  client's work is tracked in the transaction it runs in").
+- The admin kit's `onWrite` gets the development checks, so a loop of
+  writes there is an `n-plus-one`, which a strict test app throws (Server:
+  "The admin kit's `onWrite` gets the development checks").
+- `setupRedisAdapter` gives the adapter it builds the server's
+  `cluster.timeoutMs` (1 s by default) as its new `requestsTimeout`, where
+  the Redis adapter's own default is 5 s, which also bounds the app's own
+  `fetchSockets` through it, and a `cluster.timeoutMs` that is not above 0
+  makes it throw a `TypeError` (Server: "`setupRedisAdapter` gives the
+  adapter it builds the server's `cluster.timeoutMs`").
 - On a `binary: true` server behind a cluster adapter, a node of an earlier
   version reads `null` for each binary value a stream pushes from a node of
   this version: replace every node at once (Server: "A stream's binary
@@ -34,13 +45,23 @@ What an app on 5.1.3 checks, each with the entry below that says more:
 - Every call waits for its socket's own `qd:hello`, so a test double or a
   fake server must send one (Client: "A call goes out only on a socket
   whose own hello names its user").
-- A mutation attempt that starts while new credentials await their hello is
-  refused `CANCELLED` and never sent, so a global `onError` that ignores
-  `CANCELLED` drops those writes (Client: "A mutation is sent only as the
-  user who made it").
-- `useChannel` sends every message of a burst, and a burst counts against
-  the channel's server rate and its flood guard (Client: "`useChannel`
-  sends every message of a burst").
+- A mutation made before new credentials (`setAuth`) whose attempt starts
+  while they await their hello is refused `CANCELLED` and never sent, even
+  for the same user, so a global `onError` that ignores `CANCELLED` drops
+  those writes (Client: "A mutation is sent only as the user who made it").
+- A mutation that switches the user itself (an anonymous sign-in or
+  sign-up, then `setAuth`) no longer shows its `data` and `isSuccess` to
+  the user it signs in: act on its result in `onSuccess` (Client: "A
+  mounted mutation hook shows a call only to the user it ran as").
+- `useChannel` sends a burst's messages, up to 64 at once, where the server
+  got only the first, and a burst counts against the channel's server rate
+  and its flood guard (Client: "`useChannel` sends every message of a
+  burst").
+- Lint's write rules count a `Tracked` only when the file imports it from
+  quickdraw (one re-exported from the app's own module no longer silences
+  `no-untracked-write`), and check `this.<member>` and destructured
+  bindings typed with it, so an upgrade can report new errors (Lint: "The
+  write rules count quickdraw's `Tracked` alone").
 - A mock client made with `session: { isKnown: false }` reads nothing
   before `$session({ isKnown: true })`, and the same user known again after
   `isKnown: false` reads its queries again, which `calls` counts (Testing:
