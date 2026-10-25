@@ -10,6 +10,8 @@
 // holds nothing once its hooks are gone, and its listeners live on the
 // connection's socket. Closing the connection stops every timer it runs
 // (retries, reloads, checks); the next connect resumes what is still held.
+// A connection a script's live store follows (`liveStore.ts`) takes none:
+// the two would unsubscribe each other's rows and scopes (`owner.ts`).
 //
 // React-free.
 
@@ -19,6 +21,7 @@ import { storeOf } from "../optimistic";
 import { sessionOf } from "../session";
 import { listenToFrames } from "./demux";
 import type { LiveHost } from "./host";
+import { claimLive } from "./owner";
 import type { PresenceStore } from "./presence";
 import { queryCacheOf } from "./queryCache";
 import { createStores, followConnection, type LiveData } from "./stores";
@@ -33,6 +36,8 @@ function liveHostOf(connection: QuickdrawConnection, queryClient: QueryClient): 
 }
 
 function createLiveData(connection: QuickdrawConnection, queryClient: QueryClient): LiveData {
+  // A live store on the same socket would unsubscribe these stores' rows and scopes (`owner.ts`).
+  claimLive(connection, "queryClient");
   const live = createStores(liveHostOf(connection, queryClient));
   listenToFrames(connection.socket, live);
   followConnection(connection, () => sessionOf(connection, queryClient), live);
@@ -76,6 +81,7 @@ export function inertLiveData(
   queryClient: QueryClient,
   presence: PresenceStore,
 ): LiveData {
+  claimLive(connection, "queryClient");
   const live = createStores(liveHostOf(connection, queryClient), presence);
   livesOf(connection).set(queryClient, live);
   return live;
