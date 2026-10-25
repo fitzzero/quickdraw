@@ -34,22 +34,20 @@
 //   global `afterEach` (as Testing Library unmounts after each test), and by
 //   `$reset()`.
 
-import {
-  QueryClient,
-  useMutation,
-  useQuery,
-  type Query,
-  type QueryKey,
-  type Updater,
-} from "@tanstack/react-query";
+import { QueryClient, type Query, type QueryKey, type Updater } from "@tanstack/react-query";
 import { createBinding, invalidateWith, registerQuery, type Binding } from "../client/binding";
-import type { MethodMutationOptions, MethodQueryOptions } from "../client/hooks";
 import { methodKey, methodKeyPrefix, type MethodQueryKey } from "../client/keys";
 import { buildCaller, type MethodTarget } from "../client/members";
 import type { ContractMap } from "../contract/infer";
+import {
+  useMockMutation,
+  useMockQuery,
+  type MethodMutationOptions,
+  type MethodQueryOptions,
+} from "./mockCalls";
 import { createMockStore, mockLiveMembers } from "./mockLive";
 import { mockSearchMember } from "./mockSearch";
-import { mockSessionControls, startingSession } from "./mockSession";
+import { mockSessionControls, startingSession, type MockSessionControls } from "./mockSession";
 import type { MethodStub, MockClient, MockClientOptions } from "./mockTypes";
 
 /** How a stub answers its calls. */
@@ -135,22 +133,11 @@ function withStub<T extends object>(member: T, stub: Stub): T {
 /** What the members of one mock client share. */
 interface MockContext {
   readonly queryClient: QueryClient;
+  /** The connection of the mock's own session, which its hooks read outside its providers. */
+  readonly connection: MockSessionControls["connection"];
   readonly binding: Binding;
   /** A new stub for the method of `target`. */
   stub(target: MethodTarget): Stub;
-}
-
-function useMockQuery(
-  queryClient: QueryClient,
-  stub: Stub,
-  queryKey: MethodQueryKey,
-  input: unknown,
-  options: MethodQueryOptions<unknown> = {},
-) {
-  return useQuery(
-    { retry: false, ...options, queryKey, queryFn: () => stub.invoke(input) },
-    queryClient,
-  );
 }
 
 function mockQueryMember(
@@ -167,8 +154,9 @@ function mockQueryMember(
       // The caller's options over the method's defaults, as on the typed client.
       useQuery: (input?: unknown, options?: MethodQueryOptions<unknown>) =>
         useMockQuery(
+          context.connection,
           context.queryClient,
-          stub,
+          stub.invoke,
           key(input),
           input,
           defaults === undefined ? options : { ...defaults, ...options },
@@ -186,28 +174,12 @@ function mockQueryMember(
   return member;
 }
 
-function useMockMutation(
-  queryClient: QueryClient,
-  target: MethodTarget,
-  stub: Stub,
-  options: MethodMutationOptions<unknown, unknown> = {},
-) {
-  return useMutation(
-    {
-      mutationKey: methodKeyPrefix(target.service, target.method),
-      ...options,
-      mutationFn: (input: unknown) => stub.invoke(input),
-    },
-    queryClient,
-  );
-}
-
 function mockMutationMember(context: MockContext, target: MethodTarget): object {
   const stub = context.stub(target);
   return withStub(
     {
       useMutation: (options?: MethodMutationOptions<unknown, unknown>) =>
-        useMockMutation(context.queryClient, target, stub, options),
+        useMockMutation(context.connection, context.queryClient, target, stub.invoke, options),
       call: (input?: unknown): Promise<unknown> => stub.invoke(input),
     },
     stub,
@@ -267,11 +239,14 @@ function stubMaker(queryClient: QueryClient, stubs: Stub[]): (target: MethodTarg
 function resetMock(
   queryClient: QueryClient,
   store: ReturnType<typeof createMockStore>,
+  session: MockSessionControls,
   stubs: readonly Stub[],
   quiet: boolean,
 ): void {
   queryClient.clear();
   store.clear(quiet);
+  // The cache session follows the session back to the starting one, which a quiet clear tells nobody.
+  session.resettle();
   for (const stub of stubs) {
     if (quiet) {
       stub.forget();
@@ -330,7 +305,12 @@ export function createMockClient<const Contracts extends ContractMap>(
   const binding = createBinding();
   binding.coordinator = session.coordinator;
   const stubs: Stub[] = [];
-  const context: MockContext = { queryClient, binding, stub: stubMaker(queryClient, stubs) };
+  const context: MockContext = {
+    queryClient,
+    connection: session.connection,
+    binding,
+    stub: stubMaker(queryClient, stubs),
+  };
   const client = buildCaller(
     "createMockClient",
     contracts,
@@ -351,13 +331,13 @@ export function createMockClient<const Contracts extends ContractMap>(
     $presence: { value: session.setPresence },
     $reset: {
       value: (): void => {
-        resetMock(queryClient, store, stubs, false);
+        resetMock(queryClient, store, session, stubs, false);
       },
     },
   });
   if (options.resetAfterEach !== false) {
     resetAfterEachTest(() => {
-      resetMock(queryClient, store, stubs, true);
+      resetMock(queryClient, store, session, stubs, true);
     });
   }
   return Object.freeze(client) as MockClient<Contracts>;

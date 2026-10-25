@@ -4,7 +4,7 @@
 // when the test changes them.
 
 import { useQueryClient } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { usePresence, useQuickdraw } from "../client/index";
@@ -462,6 +462,154 @@ describe("the mock's session", () => {
   });
 });
 
+/** A component that reads `get` and runs `rename` of a mock, and says what it shows, into `seen`. */
+function boardOf(qd: ReturnType<typeof createMockClient<{ task: typeof task }>>, seen: string[]) {
+  return function Board() {
+    const { userId } = useQuickdraw();
+    const got = qd.task.get.useQuery({ id: "t1" });
+    const rename = qd.task.rename.useMutation();
+    const shown = `get=${got.data?.title ?? got.status} rename=${rename.status} data=${rename.data?.title ?? "-"} vars=${rename.variables?.title ?? "-"} error=${rename.error?.code ?? "-"}`;
+    const line = `${String(userId)} ${shown}`;
+    seen.push(line);
+    return (
+      <button type="button" onClick={() => rename.mutate({ id: "t1", title: "ada-input" })}>
+        {line}
+      </button>
+    );
+  };
+}
+
+describe("the mock across a switch of users", () => {
+  it.each([
+    ["succeeded", "success data=ada-input vars=ada-input error=-"],
+    ["was refused", "error data=- vars=ada-input error=CONFLICT"],
+  ])(
+    "shows the next user none of the last user's results, nor a call of theirs that %s",
+    async (how, after) => {
+      const qd = createMockClient({ task }, { userId: "ada" });
+      const seen: string[] = [];
+      const Board = boardOf(qd, seen);
+      qd.task.get.mockResolvedValue(cardOf("t1", "ada-note"));
+      if (how === "succeeded") {
+        qd.task.rename.mockImplementation(({ id, title }) => cardOf(id, title));
+      } else {
+        qd.task.rename.mockRejectedValue(new QuickdrawError("CONFLICT", "Taken"));
+      }
+      render(<Board />, { wrapper: qd.$Provider });
+      await screen.findByText(/^ada get=ada-note rename=idle /);
+      fireEvent.click(screen.getByRole("button"));
+      await screen.findByText(`ada get=ada-note rename=${after}`);
+      // Ed's read waits for an answer of its own.
+      act(() => {
+        qd.task.get.mockReset();
+      });
+      const switched = seen.length;
+      act(() => {
+        qd.$session({ userId: "ed" });
+      });
+      await screen.findByText("ed get=pending rename=idle data=- vars=- error=-");
+      const ed = seen.slice(switched).filter((line) => line.startsWith("ed "));
+      expect(ed.filter((line) => line.includes("ada"))).toEqual([]);
+      expect(qd.$queryClient.getMutationCache().getAll()).toEqual([]);
+    },
+  );
+
+  it("keeps the same user's own state, shows none of it while it awaits a hello, and reads it again after", async () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    const seen: string[] = [];
+    const Board = boardOf(qd, seen);
+    qd.task.get.mockResolvedValue(cardOf("t1", "ada-note"));
+    qd.task.rename.mockImplementation(({ id, title }) => cardOf(id, title));
+    render(<Board />, { wrapper: qd.$Provider });
+    await screen.findByText(/^ada get=ada-note rename=idle /);
+    fireEvent.click(screen.getByRole("button"));
+    const shown = "ada get=ada-note rename=success data=ada-input vars=ada-input error=-";
+    await screen.findByText(shown);
+    act(() => {
+      qd.$session({ serviceAccess: { taskService: "Admin" } });
+    });
+    expect(screen.getByText(shown)).toBeTruthy();
+    // New credentials awaiting their hello: what is cached may be the last user's.
+    act(() => {
+      qd.$session({ isKnown: false });
+    });
+    expect(screen.getByText("null get=pending rename=idle data=- vars=- error=-")).toBeTruthy();
+    // The same user's hello: their state again, and the query read again as them.
+    act(() => {
+      qd.$session({});
+    });
+    await screen.findByText(shown);
+    expect(qd.task.get.calls).toEqual([{ id: "t1" }, { id: "t1" }]);
+  });
+
+  it("reads once a hello names the session's user, as the real client does", async () => {
+    const qd = createMockClient({ task }, { session: { userId: "ada", isKnown: false } });
+    const seen: string[] = [];
+    const Board = boardOf(qd, seen);
+    qd.task.get.mockResolvedValue(cardOf("t1", "ada-note"));
+    render(<Board />, { wrapper: qd.$Provider });
+    expect(screen.getByText("null get=pending rename=idle data=- vars=- error=-")).toBeTruthy();
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    });
+    expect(qd.task.get.calls).toEqual([]);
+    act(() => {
+      qd.$session({ isKnown: true });
+    });
+    await screen.findByText(/^ada get=ada-note /);
+    expect(qd.task.get.calls).toEqual([{ id: "t1" }]);
+  });
+
+  it("refuses a call whose user changed before it ran, never calling its stub, as the real client does", async () => {
+    const qd = createMockClient({ task }, { userId: "ada" });
+    const gate: { open?: () => void } = {};
+    const outcomes: string[] = [];
+    function Rename() {
+      const rename = qd.task.rename.useMutation({
+        onMutate: async () => {
+          await new Promise<void>((resolve) => {
+            gate.open = resolve;
+          });
+        },
+      });
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            rename.mutateAsync({ id: "t1", title: "ada-input" }).then(
+              () => outcomes.push("answered"),
+              (error: unknown) =>
+                outcomes.push(error instanceof QuickdrawError ? error.code : String(error)),
+            );
+          }}
+        >
+          rename
+        </button>
+      );
+    }
+    qd.task.rename.mockImplementation(({ id, title }) => cardOf(id, title));
+    render(<Rename />, { wrapper: qd.$Provider });
+    fireEvent.click(screen.getByText("rename"));
+    // Its onMutate runs as Ada: the attempt starts once it ends, after the switch.
+    await waitFor(() => {
+      expect(gate.open).toBeDefined();
+    });
+    act(() => {
+      qd.$session({ userId: "ed" });
+    });
+    await act(async () => {
+      gate.open?.();
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    });
+    expect(outcomes).toEqual(["CANCELLED"]);
+    expect(qd.task.rename.calls).toEqual([]);
+  });
+});
+
 describe("after each test", () => {
   // Made while the file is collected, as an app's test module makes its mock.
   const qd = createMockClient({ task });
@@ -510,6 +658,27 @@ describe("after each test", () => {
     // A mock made with resetAfterEach: false keeps what it was given.
     expect(kept.task.get.calls).toEqual([{ id: "t1" }]);
     await expect(kept.task.get.call({ id: "t1" })).resolves.toMatchObject({ title: "Kept" });
+  });
+
+  it("keeps what a later test reads as the starting user, the first test's switch of users settled", async () => {
+    function Title() {
+      const got = qd.task.get.useQuery({ id: "t1" });
+      return <p>{`title ${got.data?.title ?? got.status}`}</p>;
+    }
+    qd.task.get.mockResolvedValue(cardOf("t1", "Third"));
+    render(<Title />);
+    await screen.findByText("title Third");
+    // A change of the mock's store: the cache follows the session, which is the starting one.
+    act(() => {
+      qd.task.useEntity.mockRow(cardOf("t2", "Other"));
+    });
+    await act(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    });
+    expect(screen.getByText("title Third")).toBeTruthy();
+    expect(qd.task.get.calls).toHaveLength(1);
   });
 });
 

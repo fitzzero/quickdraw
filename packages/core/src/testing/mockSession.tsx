@@ -33,6 +33,7 @@ import { QuickdrawContext, renderOnServerAs, type QuickdrawContextValue } from "
 import { createInvalidationCoordinator, type InvalidationCoordinator } from "../client/coordinator";
 import { inertLiveData } from "../client/live/liveData";
 import type { PresenceStore } from "../client/live/presence";
+import { sessionOf as cacheSessionOf } from "../client/session";
 import {
   MAX_ENTITY_IDS_PER_SOCKET,
   MAX_SCOPES_PER_SOCKET,
@@ -248,8 +249,45 @@ export interface MockSessionControls {
   readonly Provider: (props: MockProviderProps) => ReactElement;
   /** The invalidation coordinator of the mock's cache, which the provider gives the hooks too. */
   readonly coordinator: InvalidationCoordinator;
+  /** The connection the mock's own session shows, which its members' hooks read outside a provider. */
+  readonly connection: QuickdrawConnection;
   setSession(session: MockSession): void;
   setPresence(room: string, users: readonly string[]): void;
+  /** Settles the mock's cache for its session again: after a reset that told nobody of it. */
+  resettle(): void;
+}
+
+/**
+ * The real cache session (`../client/session.ts`) of the mock's cache,
+ * following the mock's own session through `connection`: another user's
+ * hello removes quickdraw's queries and mutations and drops the overlays,
+ * and the same user's first hello after none reads every query again. It
+ * listens before any hook, as the real provider's session does, and hears
+ * `resettle` too, for a quiet reset. Returns `resettle`.
+ */
+function followSession(
+  connection: QuickdrawConnection,
+  store: MockStore,
+  queryClient: QueryClient,
+): () => void {
+  const listeners = new Set<() => void>();
+  const followed: QuickdrawConnection = Object.freeze({
+    ...connection,
+    subscribe: (listener: () => void) => {
+      const stop = store.subscribe(listener);
+      listeners.add(listener);
+      return () => {
+        stop();
+        listeners.delete(listener);
+      };
+    },
+  });
+  cacheSessionOf(followed, queryClient);
+  return () => {
+    for (const listener of [...listeners]) {
+      listener();
+    }
+  };
 }
 
 /** The session a mock starts with: its `session` option over `userId`, connected and known. */
@@ -303,6 +341,7 @@ export function mockSessionControls(
     return Object.freeze({ connection, queryClient, coordinator });
   };
   const value = contextOver(store.session);
+  const resettle = followSession(value.connection, store, queryClient);
   /** A provider's `session` prop: its own connection, and the scope the mock's hooks read. */
   const scopedBy = (key: string): { value: QuickdrawContextValue; scoped: ScopedSession } => {
     const scope = scopeOf(store, JSON.parse(key) as MockSession);
@@ -326,6 +365,8 @@ export function mockSessionControls(
   return Object.freeze({
     Provider: MockQuickdrawProvider,
     coordinator,
+    connection: value.connection,
+    resettle,
     setSession(session: MockSession): void {
       store.setSession(sessionOver("$session", base, session));
     },
