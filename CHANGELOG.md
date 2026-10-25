@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Upgrading from 5.1.3
+
+What an app on 5.1.3 checks, each with the entry below that says more:
+
+- `socketOptions.retries` is a `TypeError`, unless it is `0` (Client:
+  "`socketOptions` refuses Socket.IO's `retries`").
+- An HTTP call whose `authenticate` or `loadServiceAccess` throws anything
+  but a `QuickdrawError` `UNAUTHENTICATED` or `FORBIDDEN` is answered
+  `INTERNAL` (500), not 401 (Server: "an HTTP call whose `authenticate`
+  cannot run"), and an MCP `principal` hook that does is answered
+  `INTERNAL`, not `UNAUTHENTICATED` (Server: "an MCP call whose `principal`
+  hook cannot run").
+- `access.cacheMs` needs the storage adapter's `onWrite`, or
+  `createDispatcher` throws a `TypeError` (Server: "With `cacheMs`, a check
+  later in the same call sees the call's own access writes").
+- The root `db` used inside a `db.$transaction(async (tx) => ...)` callback
+  runs outside the transaction: it neither rolls back with it nor sees its
+  rows. Write through `tx` (Server: "each client's work is tracked in the
+  transaction it runs in").
+- `setupRedisAdapter`'s `requestsTimeout` defaults to `cluster.timeoutMs`
+  (1 s by default, where the Redis adapter's own default is 5 s), and one
+  that is not above 0 is a `TypeError` (Server: "`setupRedisAdapter` gives
+  the adapter it builds the server's `cluster.timeoutMs`").
+- On a `binary: true` server behind a cluster adapter, a node of an earlier
+  version reads `null` for each binary value a stream pushes from a node of
+  this version: replace every node at once (Server: "A stream's binary
+  items reach the other nodes as binary").
+- Every call waits for its socket's own `qd:hello`, so a test double or a
+  fake server must send one (Client: "A call goes out only on a socket
+  whose own hello names its user").
+- A mutation attempt that starts while new credentials await their hello is
+  refused `CANCELLED` and never sent, so a global `onError` that ignores
+  `CANCELLED` drops those writes (Client: "A mutation is sent only as the
+  user who made it").
+- `useChannel` sends every message of a burst, and a burst counts against
+  the channel's server rate and its flood guard (Client: "`useChannel`
+  sends every message of a burst").
+- A mock client made with `session: { isKnown: false }` reads nothing
+  before `$session({ isKnown: true })`, and the same user known again after
+  `isKnown: false` reads its queries again, which `calls` counts (Testing:
+  "The mock client follows its session as the real client does").
+
 ### Client
 
 - **Live data for scripts, without TanStack: a live store on
