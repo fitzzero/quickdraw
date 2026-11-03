@@ -119,7 +119,7 @@ jobs:
               apt-get update -qq && \
               apt-get install -y -qq --no-install-recommends \
                 ca-certificates git curl jq sudo openssl openssh-client openssh-server procps unzip zstd pigz \
-                postgresql-client-16 gnupg python3 make g++ \
+                postgresql-client-18 gnupg python3 make g++ \
                 `# ripgrep: agent guidance tells agents to prefer rg over grep, but it was` \
                 `# absent in 5 of 50 audited pod sessions (exit 127) — pin it so the` \
                 `# toolchain is uniform. xz-utils: tar xf *.tar.xz failed with` \
